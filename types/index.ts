@@ -177,6 +177,7 @@ export interface CalculatorState {
   holdingCosts: HoldingCosts;
   saleCosts: SaleCosts;
   taxInfo: TaxInfo;
+  vatInfo: VatInfo;
   
   // 고급 기능
   targetProfit: number;         // 목표 순수익
@@ -217,6 +218,8 @@ export interface CalculationResult {
   holdingCostTotal: number;
   saleCostTotal: number;
   taxTotal: number;
+  vatPayable: number;             // 납부 부가세 (별도 항목)
+  isVatApplicable: boolean;       // 부가세 과세 여부
 
   // 역산
   maxBidForTargetProfit: number;    // 목표 순수익 달성 최대 입찰가
@@ -243,6 +246,67 @@ export interface LeverageAnalysis {
   netProfit: number;            // 순수익
   roe: number;                  // 자기자본수익률 (ROE)
   totalProfitRate: number;      // 전체 수익률
+}
+
+// ====================================
+// VAT (부가가치세) 정보
+// ====================================
+
+// 토지/건물 안분 방법
+export type LandBuildingAllocMethod = 'standard' | 'appraisal' | 'direct';
+
+// 매도가 VAT 포함 여부
+export type VatInclusionType = 'exclusive' | 'inclusive'; // exclusive=별도, inclusive=포함
+
+// 낙찰가 부가세 포함 여부
+export type PurchaseVatType = 'included' | 'separate' | 'none';
+
+export interface VatInfo {
+  // 과세 여부 (자동 판단)
+  isVatApplicable: boolean;       // 부가세 과세 대상 여부
+
+  // 토지/건물 안분 방법
+  allocMethod: LandBuildingAllocMethod;
+
+  // 방법 1: 기준시가 안분
+  landStandardPrice: number;       // 토지 기준시가
+  buildingStandardPrice: number;   // 건물 기준시가
+  // 도우미: 개별공시지가
+  landUnitPrice: number;           // 개별공시지가 (원/㎡)
+  landAreaM2: number;              // 토지 면적 (㎡)
+
+  // 방법 2: 감정평가 안분
+  landAppraisalPrice: number;      // 토지 감정가
+  buildingAppraisalPrice: number;  // 건물 감정가
+
+  // 방법 3: 직접 입력
+  buildingDirectAmount: number;    // 건물분 직접 입력
+  landDirectAmount: number;        // 토지분 직접 입력
+
+  // 계산 결과 (자동)
+  buildingRatio: number;           // 건물 비율 (0~1)
+  landRatio: number;               // 토지 비율 (0~1)
+  buildingSaleAmount: number;      // 건물분 매도가
+  landSaleAmount: number;          // 토지분 매도가
+
+  // 매도 부가세
+  vatInclusionType: VatInclusionType;  // VAT 별도/포함
+  outputVat: number;               // 매출세액 (건물분 매도가 × 10%)
+  buildingSupplyAmount: number;    // 건물분 공급가액 (VAT 제외)
+
+  // 취득(매입) 부가세
+  purchaseVatType: PurchaseVatType;  // 낙찰가 부가세 포함 여부
+  inputVatFromPurchase: number;    // 취득 매입세액
+
+  // 기타 매입세액 공제
+  inputVatInterior: number;        // 인테리어/수리 매입세액
+  inputVatLegalScrivener: number;  // 법무사 매입세액
+  inputVatAgentCommission: number; // 중개보수 매입세액
+  customInputVatItems: Array<{ id: string; name: string; amount: number }>; // 기타
+
+  // 최종 납부/환급
+  totalInputVat: number;           // 매입세액 합계
+  vatPayable: number;              // 납부 부가세 (양수=납부, 음수=환급)
 }
 
 // 세금 비교 (매매사업자 vs 개인 양도세)

@@ -44,7 +44,34 @@ export default function Step6Result() {
     store.acquisitionCosts,
     store.holdingCosts,
     store.saleCosts,
-    store.taxInfo
+    store.taxInfo,
+    store.vatInfo ?? {
+      isVatApplicable: false,
+      allocMethod: 'standard' as const,
+      landStandardPrice: 0,
+      buildingStandardPrice: 0,
+      landUnitPrice: 0,
+      landAreaM2: 0,
+      landAppraisalPrice: 0,
+      buildingAppraisalPrice: 0,
+      buildingDirectAmount: 0,
+      landDirectAmount: 0,
+      buildingRatio: 0.5,
+      landRatio: 0.5,
+      buildingSaleAmount: 0,
+      landSaleAmount: 0,
+      vatInclusionType: 'exclusive' as const,
+      outputVat: 0,
+      buildingSupplyAmount: 0,
+      purchaseVatType: 'none' as const,
+      inputVatFromPurchase: 0,
+      inputVatInterior: 0,
+      inputVatLegalScrivener: 0,
+      inputVatAgentCommission: 0,
+      customInputVatItems: [],
+      totalInputVat: 0,
+      vatPayable: 0,
+    }
   );
 
   // 세금 비교
@@ -65,6 +92,7 @@ export default function Step6Result() {
     { name: '보유 비용', value: result.holdingCostTotal, color: '#8B5CF6' },
     { name: '매도 비용', value: result.saleCostTotal, color: '#10B981' },
     { name: '세금', value: result.taxTotal, color: '#EF4444' },
+    ...(result.vatPayable > 0 ? [{ name: '부가세 납부', value: result.vatPayable, color: '#F97316' }] : []),
   ].filter((d) => d.value > 0);
 
   // 시나리오 차트 데이터
@@ -187,7 +215,13 @@ export default function Step6Result() {
             <CostSummaryRow label="보유 비용" amount={result.holdingCostTotal} />
             <CostSummaryRow label="매도 비용" amount={result.saleCostTotal} />
             <CostSummaryRow label="세금 합계" amount={result.taxTotal} />
-            <CostSummaryRow label="총 비용" amount={result.totalCosts} isTotal />
+            {result.isVatApplicable && (
+              <CostSummaryRow
+                label={`부가세 ${result.vatPayable >= 0 ? '납부' : '환급'}`}
+                amount={result.vatPayable}
+              />
+            )}
+            <CostSummaryRow label="총 비용" amount={result.totalCosts + (result.isVatApplicable ? result.vatPayable : 0)} isTotal />
           </div>
         </div>
       </div>
@@ -325,6 +359,11 @@ export default function Step6Result() {
                   })}
                 </tbody>
               </table>
+              {result.isVatApplicable && (
+                <div className="mt-2 p-2 bg-orange-900/20 border border-orange-700/30 rounded-lg text-xs text-orange-300">
+                  ⚠️ 부가세 과세 대상 물건 — 시나리오별 납부 부가세가 순수익에 반영되어 있습니다.
+                </div>
+              )}
             </div>
           </div>
         )}

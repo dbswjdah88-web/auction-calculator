@@ -13,6 +13,7 @@ import type {
   HoldingCosts,
   SaleCosts,
   TaxInfo,
+  VatInfo,
   CustomCostItem,
   SavedCalculation,
   CalculationResult,
@@ -25,6 +26,7 @@ import {
   calcAgentCommission,
   calcLoanInterest,
   calcPropertyTax,
+  isVatSubject,
 } from '@/lib/calculator';
 
 
@@ -131,6 +133,34 @@ const initialTaxInfo: TaxInfo = {
   localIncomeTax: 0,
 };
 
+const initialVatInfo: VatInfo = {
+  isVatApplicable: false,
+  allocMethod: 'standard',
+  landStandardPrice: 0,
+  buildingStandardPrice: 0,
+  landUnitPrice: 0,
+  landAreaM2: 0,
+  landAppraisalPrice: 0,
+  buildingAppraisalPrice: 0,
+  buildingDirectAmount: 0,
+  landDirectAmount: 0,
+  buildingRatio: 0.5,
+  landRatio: 0.5,
+  buildingSaleAmount: 0,
+  landSaleAmount: 0,
+  vatInclusionType: 'exclusive',
+  outputVat: 0,
+  buildingSupplyAmount: 0,
+  purchaseVatType: 'none',
+  inputVatFromPurchase: 0,
+  inputVatInterior: 0,
+  inputVatLegalScrivener: 0,
+  inputVatAgentCommission: 0,
+  customInputVatItems: [],
+  totalInputVat: 0,
+  vatPayable: 0,
+};
+
 // ====================================
 // 스토어 액션 타입
 // ====================================
@@ -155,11 +185,17 @@ interface CalculatorActions {
   updateHoldingCosts: (updates: Partial<HoldingCosts>) => void;
   updateSaleCosts: (updates: Partial<SaleCosts>) => void;
   updateTaxInfo: (updates: Partial<TaxInfo>) => void;
+  updateVatInfo: (updates: Partial<VatInfo>) => void;
 
   // 커스텀 항목 관리
   addCustomItem: (section: 'acquisition' | 'holding' | 'sale' | 'tax' | 'repair', item: Omit<CustomCostItem, 'id'>) => void;
   removeCustomItem: (section: 'acquisition' | 'holding' | 'sale' | 'tax' | 'repair', id: string) => void;
   updateCustomItem: (section: 'acquisition' | 'holding' | 'sale' | 'tax' | 'repair', id: string, updates: Partial<CustomCostItem>) => void;
+
+  // VAT 기타 매입세액 항목 관리
+  addVatCustomItem: (item: { name: string; amount: number }) => void;
+  removeVatCustomItem: (id: string) => void;
+  updateVatCustomItem: (id: string, updates: { name?: string; amount?: number }) => void;
 
   // 목표 설정
   setTargetProfit: (profit: number) => void;
@@ -196,6 +232,7 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
       holdingCosts: initialHoldingCosts,
       saleCosts: initialSaleCosts,
       taxInfo: initialTaxInfo,
+      vatInfo: initialVatInfo,
       targetProfit: 30_000_000,
       targetProfitRate: 10,
       savedCalculations: [],
@@ -225,8 +262,11 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
           newInfo.failedBidCount,
           newInfo.depreciationRate
         );
+        // VAT 과세 여부 자동 갱신
+        const isVatApplicable = isVatSubject(newInfo.propertyType, newInfo.areaType);
         set((state) => ({
           propertyInfo: { ...state.propertyInfo, minimumBidPrice: newMinPrice },
+          vatInfo: { ...state.vatInfo, isVatApplicable },
         }));
         get().recalculateAutoFields();
       },
@@ -308,6 +348,12 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
       updateTaxInfo: (updates) => {
         set((state) => ({
           taxInfo: { ...state.taxInfo, ...updates },
+        }));
+      },
+
+      updateVatInfo: (updates) => {
+        set((state) => ({
+          vatInfo: { ...state.vatInfo, ...updates },
         }));
       },
 
@@ -450,6 +496,40 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
         });
       },
 
+      // VAT 기타 매입세액 항목 관리
+      addVatCustomItem: (item) => {
+        const newItem = {
+          ...item,
+          id: Math.random().toString(36).substr(2, 9),
+        };
+        set((state) => ({
+          vatInfo: {
+            ...state.vatInfo,
+            customInputVatItems: [...state.vatInfo.customInputVatItems, newItem],
+          },
+        }));
+      },
+
+      removeVatCustomItem: (id) => {
+        set((state) => ({
+          vatInfo: {
+            ...state.vatInfo,
+            customInputVatItems: state.vatInfo.customInputVatItems.filter((i) => i.id !== id),
+          },
+        }));
+      },
+
+      updateVatCustomItem: (id, updates) => {
+        set((state) => ({
+          vatInfo: {
+            ...state.vatInfo,
+            customInputVatItems: state.vatInfo.customInputVatItems.map((i) =>
+              i.id === id ? { ...i, ...updates } : i
+            ),
+          },
+        }));
+      },
+
       // 목표 설정
       setTargetProfit: (profit) => set({ targetProfit: profit }),
       setTargetProfitRate: (rate) => set({ targetProfitRate: rate }),
@@ -501,6 +581,9 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
         const agentCommissionRate =
           expectedSalePrice > 0 ? (agentCommission / expectedSalePrice) * 100 : 0;
 
+        // VAT 과세 여부 자동 갱신
+        const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
+
         set((state) => ({
           acquisitionCosts: {
             ...state.acquisitionCosts,
@@ -520,6 +603,10 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
             agentCommission,
             agentCommissionRate,
           },
+          vatInfo: {
+            ...state.vatInfo,
+            isVatApplicable,
+          },
         }));
       },
 
@@ -533,9 +620,13 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
           holdingCosts,
           saleCosts,
           taxInfo,
+          vatInfo,
           targetProfit,
           targetProfitRate,
         } = get();
+
+        // vatInfo가 없는 경우 (구버전 localStorage) 기본값 사용
+        const safeVatInfo = vatInfo ?? initialVatInfo;
 
         return calculateResult(
           propertyInfo,
@@ -545,6 +636,7 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
           holdingCosts,
           saleCosts,
           taxInfo,
+          safeVatInfo,
           targetProfit,
           targetProfitRate
         );
@@ -567,6 +659,7 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
             holdingCosts: state.holdingCosts,
             saleCosts: state.saleCosts,
             taxInfo: state.taxInfo,
+            vatInfo: state.vatInfo,
           },
         };
         set((s) => ({
@@ -602,6 +695,7 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
           holdingCosts: initialHoldingCosts,
           saleCosts: initialSaleCosts,
           taxInfo: initialTaxInfo,
+          vatInfo: initialVatInfo,
           targetProfit: 30_000_000,
           targetProfitRate: 10,
           areaAvgBidRate: 80,
@@ -610,7 +704,7 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
     }),
     {
       name: 'auction-calculator-storage',
-      version: 1,
+      version: 2, // 버전 올림 (vatInfo 추가)
     }
   )
 );

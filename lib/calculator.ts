@@ -11,6 +11,7 @@ import type {
   HoldingCosts,
   SaleCosts,
   TaxInfo,
+  VatInfo,
   CalculationResult,
   ScenarioRow,
   LeverageAnalysis,
@@ -402,6 +403,152 @@ export const calcTaxes = (
 };
 
 // ====================================
+// VAT (부가가치세) 계산
+// ====================================
+
+/**
+ * 물건 종류 + 면적에 따라 부가가치세 과세 대상 여부 판단
+ * - 주거용(아파트/빌라/다세대/단독) 85㎡ 초과: 과세
+ * - 오피스텔: 주거용으로 사용 시 85㎡ 초과 과세 (여기서는 동일 기준 적용)
+ * - 상가/근생/공장: 면적 무관 항상 과세
+ * - 토지: 항상 면세
+ */
+export const isVatSubject = (
+  propertyType: PropertyType,
+  areaType: 'under85' | 'over85'
+): boolean => {
+  if (propertyType === 'land') return false; // 토지 면세
+  if (['commercial', 'neighborhood', 'factory'].includes(propertyType)) return true; // 상가/근생/공장 항상 과세
+  // 주거용 + 오피스텔: 85㎡ 초과만 과세
+  return areaType === 'over85';
+};
+
+/**
+ * 토지/건물 안분 비율 계산
+ * returns { buildingRatio, landRatio }
+ */
+export const calcLandBuildingRatio = (
+  vatInfo: VatInfo
+): { buildingRatio: number; landRatio: number } => {
+  let landVal = 0;
+  let buildingVal = 0;
+
+  if (vatInfo.allocMethod === 'standard') {
+    landVal = vatInfo.landStandardPrice;
+    buildingVal = vatInfo.buildingStandardPrice;
+  } else if (vatInfo.allocMethod === 'appraisal') {
+    landVal = vatInfo.landAppraisalPrice;
+    buildingVal = vatInfo.buildingAppraisalPrice;
+  } else {
+    // direct: 직접 비율로 계산
+    const total = vatInfo.buildingDirectAmount + vatInfo.landDirectAmount;
+    if (total <= 0) return { buildingRatio: 0.5, landRatio: 0.5 };
+    return {
+      buildingRatio: vatInfo.buildingDirectAmount / total,
+      landRatio: vatInfo.landDirectAmount / total,
+    };
+  }
+
+  const total = landVal + buildingVal;
+  if (total <= 0) return { buildingRatio: 0.5, landRatio: 0.5 };
+  return {
+    buildingRatio: buildingVal / total,
+    landRatio: landVal / total,
+  };
+};
+
+/**
+ * VAT 전체 계산
+ */
+export const calcVat = (
+  vatInfo: VatInfo,
+  expectedSalePrice: number,
+  bidPrice: number,
+  isApplicable: boolean
+): {
+  buildingRatio: number;
+  landRatio: number;
+  buildingSaleAmount: number;
+  landSaleAmount: number;
+  buildingSupplyAmount: number;
+  outputVat: number;
+  inputVatFromPurchase: number;
+  totalInputVat: number;
+  vatPayable: number;
+} => {
+  if (!isApplicable) {
+    return {
+      buildingRatio: 0, landRatio: 1,
+      buildingSaleAmount: 0, landSaleAmount: expectedSalePrice,
+      buildingSupplyAmount: 0, outputVat: 0,
+      inputVatFromPurchase: 0, totalInputVat: 0, vatPayable: 0,
+    };
+  }
+
+  const { buildingRatio, landRatio } = calcLandBuildingRatio(vatInfo);
+
+  // 건물분 / 토지분 매도가
+  const buildingSaleAmount = expectedSalePrice * buildingRatio;
+  const landSaleAmount = expectedSalePrice * landRatio;
+
+  // 매출세액 계산
+  let outputVat = 0;
+  let buildingSupplyAmount = buildingSaleAmount;
+
+  if (vatInfo.vatInclusionType === 'exclusive') {
+    // VAT 별도: 매도가에 VAT 미포함 → 매출세액 = 건물분 × 10%
+    outputVat = buildingSaleAmount * 0.1;
+    buildingSupplyAmount = buildingSaleAmount;
+  } else {
+    // VAT 포함: 건물분 공급가액 = 건물분 / 1.1, VAT = 공급가액 × 10%
+    buildingSupplyAmount = buildingSaleAmount / 1.1;
+    outputVat = buildingSupplyAmount * 0.1;
+  }
+
+  // 취득 매입세액
+  let inputVatFromPurchase = 0;
+  const buildingBidAmount = bidPrice * buildingRatio;
+
+  if (vatInfo.purchaseVatType === 'included') {
+    inputVatFromPurchase = (buildingBidAmount / 1.1) * 0.1;
+  } else if (vatInfo.purchaseVatType === 'separate') {
+    inputVatFromPurchase = buildingBidAmount * 0.1;
+  }
+
+  // 기타 매입세액 (각 금액의 10/110)
+  const inputVatInterior = vatInfo.inputVatInterior > 0
+    ? (vatInfo.inputVatInterior / 1.1) * 0.1 : 0;
+  const inputVatLegalScrivener = vatInfo.inputVatLegalScrivener > 0
+    ? (vatInfo.inputVatLegalScrivener / 1.1) * 0.1 : 0;
+  const inputVatAgentCommission = vatInfo.inputVatAgentCommission > 0
+    ? (vatInfo.inputVatAgentCommission / 1.1) * 0.1 : 0;
+  const customInputVat = vatInfo.customInputVatItems.reduce(
+    (sum, item) => sum + (item.amount > 0 ? (item.amount / 1.1) * 0.1 : 0), 0
+  );
+
+  const totalInputVat =
+    inputVatFromPurchase +
+    inputVatInterior +
+    inputVatLegalScrivener +
+    inputVatAgentCommission +
+    customInputVat;
+
+  const vatPayable = outputVat - totalInputVat;
+
+  return {
+    buildingRatio,
+    landRatio,
+    buildingSaleAmount,
+    landSaleAmount,
+    buildingSupplyAmount,
+    outputVat,
+    inputVatFromPurchase,
+    totalInputVat,
+    vatPayable,
+  };
+};
+
+// ====================================
 // 메인 계산 함수
 // ====================================
 export const calculateResult = (
@@ -412,21 +559,41 @@ export const calculateResult = (
   holdingCosts: HoldingCosts,
   saleCosts: SaleCosts,
   taxInfo: TaxInfo,
+  vatInfo: VatInfo,
   targetProfit: number,
   targetProfitRate: number
 ): CalculationResult => {
   const { bidPrice } = bidInfo;
   const { expectedSalePrice, holdingMonths } = saleInfo;
 
+  // VAT 과세 여부 판단
+  const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
+
+  // VAT 계산
+  const vatResult = calcVat(vatInfo, expectedSalePrice, bidPrice, isVatApplicable);
+  const { vatPayable } = vatResult;
+
+  // VAT 포함 매도인 경우 실질 매도가 조정
+  // VAT 포함이면 건물분에서 VAT 만큼 실질 수령액 감소
+  const effectiveSalePrice =
+    isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
+      ? expectedSalePrice - vatResult.outputVat  // 실질 수령액 = 매도가 - 내포된 VAT
+      : expectedSalePrice;
+
   const acquisitionCostTotal = calcAcquisitionCostTotal(acquisitionCosts);
   const holdingCostTotal = calcHoldingCostTotal(holdingCosts, holdingMonths);
   const saleCostTotal = calcSaleCostTotal(saleCosts);
+
+  // 종합소득세: VAT 포함 매도 시 공급가액 기준으로 매매차익 산정
+  const saleAmountForTax = isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
+    ? vatResult.buildingSupplyAmount + vatResult.landSaleAmount   // 공급가액 + 토지분
+    : expectedSalePrice;
 
   const { comprehensiveIncomeTax, localIncomeTax, tradingProfit } =
     calcTaxes(
       taxInfo,
       bidPrice,
-      expectedSalePrice,
+      saleAmountForTax,
       acquisitionCosts,
       holdingCosts,
       holdingMonths,
@@ -434,6 +601,8 @@ export const calculateResult = (
     );
 
   const taxTotal = comprehensiveIncomeTax + localIncomeTax;
+
+  // 총비용: 취득+보유+매도+소득세 (VAT는 별도 항목)
   const totalCosts = acquisitionCostTotal + holdingCostTotal + saleCostTotal + taxTotal;
 
   // 총 투자금 = 낙찰가 + 모든 비용 - 대출금
@@ -444,14 +613,15 @@ export const calculateResult = (
     saleCostTotal -
     acquisitionCosts.loanAmount;
 
-  // 순수익 = 매도가 - 낙찰가 - 취득비용 - 보유비용 - 매도비용 - 세금
+  // 순수익 = 실질매도가 - 낙찰가 - 취득비용 - 보유비용 - 매도비용 - 소득세 - 납부VAT
   const netProfit =
-    expectedSalePrice -
+    effectiveSalePrice -
     bidPrice -
     acquisitionCostTotal -
     holdingCostTotal -
     saleCostTotal -
-    taxTotal;
+    taxTotal -
+    vatPayable;
 
   const profitRate =
     totalInvestment > 0 ? (netProfit / totalInvestment) * 100 : 0;
@@ -459,17 +629,15 @@ export const calculateResult = (
     holdingMonths > 0 ? profitRate * (12 / holdingMonths) : 0;
   const monthlyProfit = holdingMonths > 0 ? netProfit / holdingMonths : 0;
 
-  // 손익분기점
+  // 손익분기점 (VAT 납부 포함)
   const breakEvenPrice =
-    bidPrice + acquisitionCostTotal + holdingCostTotal + saleCostTotal + taxTotal;
+    bidPrice + acquisitionCostTotal + holdingCostTotal + saleCostTotal + taxTotal + vatPayable;
   const breakEvenRateToAppraisal =
     propertyInfo.appraisalValue > 0
       ? (breakEvenPrice / propertyInfo.appraisalValue) * 100
       : 0;
 
   // 역산: 목표 순수익 달성 최대 입찰가
-  // netProfit = salePrice - bid - acqCost(bid) - holdCost - saleCost - tax
-  // 근사값으로 binary search 사용
   const maxBidForTargetProfit = findMaxBid(
     propertyInfo,
     bidInfo,
@@ -478,6 +646,7 @@ export const calculateResult = (
     holdingCosts,
     saleCosts,
     taxInfo,
+    vatInfo,
     targetProfit
   );
 
@@ -489,10 +658,11 @@ export const calculateResult = (
     holdingCosts,
     saleCosts,
     taxInfo,
+    vatInfo,
     targetProfitRate
   );
 
-  // 시나리오 생성 (감정가의 50%~100%, 5% 단위)
+  // 시나리오 생성
   const scenarios = generateScenarios(
     propertyInfo,
     bidInfo,
@@ -500,7 +670,8 @@ export const calculateResult = (
     acquisitionCosts,
     holdingCosts,
     saleCosts,
-    taxInfo
+    taxInfo,
+    vatInfo
   );
 
   return {
@@ -517,6 +688,8 @@ export const calculateResult = (
     holdingCostTotal,
     saleCostTotal,
     taxTotal,
+    vatPayable,
+    isVatApplicable,
     maxBidForTargetProfit,
     maxBidForTargetRate,
     scenarios,
@@ -532,50 +705,35 @@ const findMaxBid = (
   holdingCosts: HoldingCosts,
   saleCosts: SaleCosts,
   taxInfo: TaxInfo,
+  vatInfo: VatInfo,
   targetProfit: number
 ): number => {
   if (targetProfit <= 0) return 0;
+
+  const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
 
   let lo = 0;
   let hi = saleInfo.expectedSalePrice;
 
   for (let i = 0; i < 50; i++) {
     const mid = (lo + hi) / 2;
-    const testCosts = buildCostsForBid(
-      propertyInfo,
-      mid,
-      baseCosts,
-      holdingCosts,
-      saleCosts
-    );
+    const testCosts = buildCostsForBid(propertyInfo, mid, baseCosts, holdingCosts, saleCosts);
 
     const acqTotal = calcAcquisitionCostTotal(testCosts.acq);
     const holdTotal = calcHoldingCostTotal(holdingCosts, saleInfo.holdingMonths);
     const saleTotal = calcSaleCostTotal(testCosts.sale);
+    const vatResult = calcVat(vatInfo, saleInfo.expectedSalePrice, mid, isVatApplicable);
+    const effectiveSalePrice = isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
+      ? saleInfo.expectedSalePrice - vatResult.outputVat
+      : saleInfo.expectedSalePrice;
     const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
-      taxInfo,
-      mid,
-      saleInfo.expectedSalePrice,
-      testCosts.acq,
-      holdingCosts,
-      saleInfo.holdingMonths,
-      testCosts.sale
+      taxInfo, mid, effectiveSalePrice, testCosts.acq, holdingCosts, saleInfo.holdingMonths, testCosts.sale
     );
+    const profit = effectiveSalePrice - mid - acqTotal - holdTotal - saleTotal
+      - comprehensiveIncomeTax - localIncomeTax - vatResult.vatPayable;
 
-    const profit =
-      saleInfo.expectedSalePrice -
-      mid -
-      acqTotal -
-      holdTotal -
-      saleTotal -
-      comprehensiveIncomeTax -
-      localIncomeTax;
-
-    if (profit > targetProfit) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
+    if (profit > targetProfit) lo = mid;
+    else hi = mid;
   }
 
   return Math.floor(lo);
@@ -589,53 +747,37 @@ const findMaxBidForRate = (
   holdingCosts: HoldingCosts,
   saleCosts: SaleCosts,
   taxInfo: TaxInfo,
+  vatInfo: VatInfo,
   targetRate: number
 ): number => {
   if (targetRate <= 0) return 0;
+
+  const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
 
   let lo = 0;
   let hi = saleInfo.expectedSalePrice;
 
   for (let i = 0; i < 50; i++) {
     const mid = (lo + hi) / 2;
-    const testCosts = buildCostsForBid(
-      propertyInfo,
-      mid,
-      baseCosts,
-      holdingCosts,
-      saleCosts
-    );
+    const testCosts = buildCostsForBid(propertyInfo, mid, baseCosts, holdingCosts, saleCosts);
 
     const acqTotal = calcAcquisitionCostTotal(testCosts.acq);
     const holdTotal = calcHoldingCostTotal(holdingCosts, saleInfo.holdingMonths);
     const saleTotal = calcSaleCostTotal(testCosts.sale);
+    const vatResult = calcVat(vatInfo, saleInfo.expectedSalePrice, mid, isVatApplicable);
+    const effectiveSalePrice = isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
+      ? saleInfo.expectedSalePrice - vatResult.outputVat
+      : saleInfo.expectedSalePrice;
     const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
-      taxInfo,
-      mid,
-      saleInfo.expectedSalePrice,
-      testCosts.acq,
-      holdingCosts,
-      saleInfo.holdingMonths,
-      testCosts.sale
+      taxInfo, mid, effectiveSalePrice, testCosts.acq, holdingCosts, saleInfo.holdingMonths, testCosts.sale
     );
-
-    const netProfit =
-      saleInfo.expectedSalePrice -
-      mid -
-      acqTotal -
-      holdTotal -
-      saleTotal -
-      comprehensiveIncomeTax -
-      localIncomeTax;
-
+    const netProfit = effectiveSalePrice - mid - acqTotal - holdTotal - saleTotal
+      - comprehensiveIncomeTax - localIncomeTax - vatResult.vatPayable;
     const investment = mid + acqTotal + holdTotal + saleTotal - baseCosts.loanAmount;
     const rate = investment > 0 ? (netProfit / investment) * 100 : 0;
 
-    if (rate > targetRate) {
-      lo = mid;
-    } else {
-      hi = mid;
-    }
+    if (rate > targetRate) lo = mid;
+    else hi = mid;
   }
 
   return Math.floor(lo);
@@ -682,54 +824,34 @@ export const generateScenarios = (
   baseCosts: AcquisitionCosts,
   holdingCosts: HoldingCosts,
   saleCosts: SaleCosts,
-  taxInfo: TaxInfo
+  taxInfo: TaxInfo,
+  vatInfo: VatInfo
 ): ScenarioRow[] => {
   const scenarios: ScenarioRow[] = [];
+  const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
 
   for (let rate = 50; rate <= 100; rate += 5) {
     const bidPrice = Math.round(propertyInfo.appraisalValue * (rate / 100));
-    const testCosts = buildCostsForBid(
-      propertyInfo,
-      bidPrice,
-      baseCosts,
-      holdingCosts,
-      saleCosts
-    );
+    const testCosts = buildCostsForBid(propertyInfo, bidPrice, baseCosts, holdingCosts, saleCosts);
 
     const acqTotal = calcAcquisitionCostTotal(testCosts.acq);
     const holdTotal = calcHoldingCostTotal(holdingCosts, saleInfo.holdingMonths);
     const saleTotal = calcSaleCostTotal(testCosts.sale);
+    const vatResult = calcVat(vatInfo, saleInfo.expectedSalePrice, bidPrice, isVatApplicable);
+    const effectiveSalePrice = isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
+      ? saleInfo.expectedSalePrice - vatResult.outputVat
+      : saleInfo.expectedSalePrice;
     const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
-      taxInfo,
-      bidPrice,
-      saleInfo.expectedSalePrice,
-      testCosts.acq,
-      holdingCosts,
-      saleInfo.holdingMonths,
-      testCosts.sale
+      taxInfo, bidPrice, effectiveSalePrice, testCosts.acq, holdingCosts, saleInfo.holdingMonths, testCosts.sale
     );
 
-    const netProfit =
-      saleInfo.expectedSalePrice -
-      bidPrice -
-      acqTotal -
-      holdTotal -
-      saleTotal -
-      comprehensiveIncomeTax -
-      localIncomeTax;
-
+    const netProfit = effectiveSalePrice - bidPrice - acqTotal - holdTotal - saleTotal
+      - comprehensiveIncomeTax - localIncomeTax - vatResult.vatPayable;
     const investment = bidPrice + acqTotal + holdTotal + saleTotal - baseCosts.loanAmount;
     const profitRate = investment > 0 ? (netProfit / investment) * 100 : 0;
-    const annualProfitRate =
-      saleInfo.holdingMonths > 0 ? profitRate * (12 / saleInfo.holdingMonths) : 0;
+    const annualProfitRate = saleInfo.holdingMonths > 0 ? profitRate * (12 / saleInfo.holdingMonths) : 0;
 
-    scenarios.push({
-      bidRatePercent: rate,
-      bidPrice,
-      netProfit,
-      profitRate,
-      annualProfitRate,
-    });
+    scenarios.push({ bidRatePercent: rate, bidPrice, netProfit, profitRate, annualProfitRate });
   }
 
   return scenarios;
@@ -745,62 +867,36 @@ export const calcLeverageAnalysis = (
   baseCosts: AcquisitionCosts,
   holdingCosts: HoldingCosts,
   saleCosts: SaleCosts,
-  taxInfo: TaxInfo
+  taxInfo: TaxInfo,
+  vatInfo: VatInfo
 ): LeverageAnalysis[] => {
   const ltvRatios = [0, 40, 50, 60, 70];
+  const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
 
   return ltvRatios.map((ltv) => {
     const loanAmount = Math.round(bidInfo.bidPrice * (ltv / 100));
-    const loanInterest = calcLoanInterest(
-      loanAmount,
-      baseCosts.loanRate || 4.0,
-      saleInfo.holdingMonths
-    );
-
-    const costs: AcquisitionCosts = {
-      ...baseCosts,
-      loanAmount,
-      loanInterest,
-    };
+    const loanInterest = calcLoanInterest(loanAmount, baseCosts.loanRate || 4.0, saleInfo.holdingMonths);
+    const costs: AcquisitionCosts = { ...baseCosts, loanAmount, loanInterest };
 
     const acqTotal = calcAcquisitionCostTotal(costs);
     const holdTotal = calcHoldingCostTotal(holdingCosts, saleInfo.holdingMonths);
     const saleTotal = calcSaleCostTotal(saleCosts);
-
+    const vatResult = calcVat(vatInfo, saleInfo.expectedSalePrice, bidInfo.bidPrice, isVatApplicable);
+    const effectiveSalePrice = isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
+      ? saleInfo.expectedSalePrice - vatResult.outputVat
+      : saleInfo.expectedSalePrice;
     const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
-      taxInfo,
-      bidInfo.bidPrice,
-      saleInfo.expectedSalePrice,
-      costs,
-      holdingCosts,
-      saleInfo.holdingMonths,
-      saleCosts
+      taxInfo, bidInfo.bidPrice, effectiveSalePrice, costs, holdingCosts, saleInfo.holdingMonths, saleCosts
     );
 
-    const netProfit =
-      saleInfo.expectedSalePrice -
-      bidInfo.bidPrice -
-      acqTotal -
-      holdTotal -
-      saleTotal -
-      comprehensiveIncomeTax -
-      localIncomeTax;
-
+    const netProfit = effectiveSalePrice - bidInfo.bidPrice - acqTotal - holdTotal - saleTotal
+      - comprehensiveIncomeTax - localIncomeTax - vatResult.vatPayable;
     const ownCapital = bidInfo.bidPrice + acqTotal + holdTotal + saleTotal - loanAmount;
     const roe = ownCapital > 0 ? (netProfit / ownCapital) * 100 : 0;
-    const totalProfitRate =
-      (bidInfo.bidPrice + acqTotal + holdTotal + saleTotal) > 0
-        ? (netProfit / (bidInfo.bidPrice + acqTotal + holdTotal + saleTotal)) * 100
-        : 0;
+    const totalProfitRate = (bidInfo.bidPrice + acqTotal + holdTotal + saleTotal) > 0
+      ? (netProfit / (bidInfo.bidPrice + acqTotal + holdTotal + saleTotal)) * 100 : 0;
 
-    return {
-      ltvRatio: ltv,
-      loanAmount,
-      ownCapital,
-      netProfit,
-      roe,
-      totalProfitRate,
-    };
+    return { ltvRatio: ltv, loanAmount, ownCapital, netProfit, roe, totalProfitRate };
   });
 };
 

@@ -3,7 +3,7 @@
 import React from 'react';
 import { useCalculatorStore } from '@/store/calculatorStore';
 import { MoneyInput, SectionHeader } from '@/components/ui/inputs';
-import { calcMinimumBidPrice } from '@/lib/calculator';
+import { calcMinimumBidPrice, isVatSubject } from '@/lib/calculator';
 import type { PropertyType, OccupancyStatus } from '@/types';
 
 // 시/도 목록
@@ -115,10 +115,10 @@ export default function Step1PropertyInfo() {
         </div>
       </div>
 
-      {/* 전용면적 */}
+      {/* 전용면적 + VAT 배지 */}
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">
-          전용면적 (취득세 산정용)
+          전용면적 (취득세·부가세 산정용)
         </label>
         <div className="grid grid-cols-2 gap-3">
           <div className="relative">
@@ -167,6 +167,37 @@ export default function Step1PropertyInfo() {
             </button>
           </div>
         </div>
+
+        {/* VAT 과세 배지 */}
+        {(() => {
+          const vatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
+          const isLand = propertyInfo.propertyType === 'land';
+          const isCommercial = ['commercial', 'neighborhood', 'factory'].includes(propertyInfo.propertyType);
+          return (
+            <div className="mt-2">
+              {isLand ? (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-700/50 border border-slate-600 text-xs font-medium text-slate-400">
+                  <span>🌍</span>
+                  <span>토지 — 부가가치세 전액 면세</span>
+                </div>
+              ) : vatApplicable ? (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-red-900/30 border border-red-600/50 text-xs font-medium text-red-300 animate-pulse">
+                  <span>⚠️</span>
+                  <span>
+                    부가가치세 과세 대상
+                    {isCommercial ? ' (상가·근생·공장: 면적 무관 과세)' : ' (85㎡ 초과 주거용)'}
+                  </span>
+                </div>
+              ) : (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-900/30 border border-emerald-600/50 text-xs font-medium text-emerald-300">
+                  <span>✅</span>
+                  <span>부가가치세 면세 (85㎡ 이하 주거용)</span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         <p className="text-xs text-slate-500 mt-1">
           ※ 85㎡ 이하: 농어촌특별세 면제 | 85㎡ 초과: 농어촌특별세 0.2% 추가
         </p>
