@@ -22,7 +22,30 @@ import type {
   RegulationZone,
   HousingCount,
   CorporationType,
+  BidderType,
 } from '@/types';
+
+// 개인 매매사업자 가능 주거용 물건 종류
+export const INDIVIDUAL_TRADER_ELIGIBLE_TYPES: PropertyType[] = ['apartment', 'villa', 'house', 'officetel'];
+
+/** 개인 매매사업자 적용 가능 여부 (주거용만 허용) */
+export const isIndividualTraderEligible = (propertyType: PropertyType): boolean => {
+  return INDIVIDUAL_TRADER_ELIGIBLE_TYPES.includes(propertyType);
+};
+
+/** 실제 적용 세금 모드 결정
+ *  - individual_trader + 비주거용 → 개인 양도소득세로 대체
+ *  - 그 외는 그대로 반환
+ */
+export const resolveEffectiveBidderType = (
+  bidderType: BidderType,
+  propertyType: PropertyType
+): BidderType => {
+  if (bidderType === 'individual_trader' && !isIndividualTraderEligible(propertyType)) {
+    return 'individual'; // 비주거용에는 매매사업자 불가 → 개인 양도세로
+  }
+  return bidderType;
+};
 
 // ====================================
 // 금액 포맷 유틸리티
@@ -179,6 +202,9 @@ export const calcPropertyTax = (
 // 대출 이자
 // ====================================
 export const calcLoanInterest = (loanAmount: number, annualRate: number, holdingMonths: number): number => {
+  if (!loanAmount || loanAmount <= 0) return 0;
+  if (!annualRate || annualRate <= 0) return 0;
+  if (!holdingMonths || holdingMonths <= 0) return 0;
   return loanAmount * (annualRate / 100) * (holdingMonths / 12);
 };
 
@@ -652,6 +678,9 @@ export const calcTaxComparisonDetail = (
   // 공통 기준 매매차익
   const grossProfit = salePrice - bidPrice;
 
+  // 매매사업자(종합소득세)는 주거용 물건에만 적용 가능
+  const isEligibleForTrader = isIndividualTraderEligible(propertyInfo.propertyType);
+
   // ── 1. 매매사업자 종합소득세 ──
   const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
     taxInfo, bidPrice, salePrice, acquisitionCosts, holdingCosts, holdingMonths, saleCosts
@@ -702,17 +731,28 @@ export const calcTaxComparisonDetail = (
   const corpEffective = grossProfit > 0 ? (corpResult.totalTax / grossProfit) * 100 : 0;
 
   // ── 최적 비교 ──
-  const nets = [
-    { key: 'business' as const, net: businessNetProfit },
-    { key: 'individual' as const, net: individualNetProfit },
-    { key: 'corporation' as const, net: corpNetProfit },
-  ];
+  // 주거용이 아니면 매매사업자 옵션 제외하고 비교
+  const nets = isEligibleForTrader
+    ? [
+        { key: 'business' as const, net: businessNetProfit },
+        { key: 'individual' as const, net: individualNetProfit },
+        { key: 'corporation' as const, net: corpNetProfit },
+      ]
+    : [
+        { key: 'individual' as const, net: individualNetProfit },
+        { key: 'corporation' as const, net: corpNetProfit },
+      ];
   nets.sort((a, b) => b.net - a.net);
   const best = nets[0].key;
   const bestSavings = nets[0].net - nets[nets.length - 1].net;
 
   return {
-    business: { tax: businessTax, netProfit: businessNetProfit, effectiveRate: businessEffective },
+    business: {
+      tax: businessTax,
+      netProfit: businessNetProfit,
+      effectiveRate: businessEffective,
+      eligibleForPropertyType: isEligibleForTrader,
+    },
     individual: {
       tax: individualTax,
       netProfit: individualNetProfit,
@@ -843,10 +883,56 @@ export const calculateResult = (
     ? vatResult.buildingSupplyAmount + vatResult.landSaleAmount
     : expectedSalePrice;
 
+  // 실제 적용 입찰자 유형 (비주거용 매매사업자 → 개인으로 강제)
+  const effectiveBidderType = resolveEffectiveBidderType(
+    propertyInfo.bidderType ?? 'individual',
+    propertyInfo.propertyType
+  );
+
+  // 주 세금 계산: 입찰자 유형에 따라 달라짐
+  let taxTotal = 0;
+  if (effectiveBidderType === 'individual_trader') {
+    // 개인 매매사업자: 종합소득세
+    const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
+      taxInfo, bidPrice, saleAmountForTax, acquisitionCosts, holdingCosts, holdingMonths, saleCosts
+    );
+    taxTotal = comprehensiveIncomeTax + localIncomeTax;
+  } else if (effectiveBidderType === 'corporation') {
+    // 법인: 법인세
+    const grossProfit = saleAmountForTax - bidPrice;
+    const corpResult = calcCorporateTax(
+      grossProfit, propertyInfo.propertyType, capitalGainsTaxInfo.corporationType,
+      capitalGainsTaxInfo.corporateTaxBaseIncome
+    );
+    taxTotal = corpResult.totalTax;
+  } else {
+    // 개인: 양도소득세
+    const grossProfit = saleAmountForTax - bidPrice;
+    const deductibleForCGT = capitalGainsTaxInfo.deductibleAcquisitionCosts
+      ? acquisitionCosts.acquisitionTax + acquisitionCosts.legalScrivenerFee +
+        acquisitionCosts.registrationLicenseTax + acquisitionCosts.stampDuty +
+        (capitalGainsTaxInfo.deductibleRepairCosts ? holdingCosts.repairCosts.reduce((s, i) => s + i.amount, 0) : 0)
+      : 0;
+    const cgtProfit = Math.max(0, grossProfit - deductibleForCGT);
+    const ltdOverride = capitalGainsTaxInfo.autoLongTermDeduction ? null : capitalGainsTaxInfo.longTermDeductionRate;
+    const cgtResult = calcCapitalGainsTaxDetailed(
+      cgtProfit, propertyInfo.propertyType, holdingMonths,
+      capitalGainsTaxInfo.regulationZone, capitalGainsTaxInfo.housingCount,
+      capitalGainsTaxInfo.isOneHousehold, capitalGainsTaxInfo.residencyYears,
+      capitalGainsTaxInfo.isNonbusiness, ltdOverride
+    );
+    taxTotal = cgtResult.totalTax;
+  }
+
+  // 종합소득세는 taxTotal에서 분리 표시용으로도 계산 유지
   const { comprehensiveIncomeTax, localIncomeTax, tradingProfit } = calcTaxes(
     taxInfo, bidPrice, saleAmountForTax, acquisitionCosts, holdingCosts, holdingMonths, saleCosts
   );
-  const taxTotal = comprehensiveIncomeTax + localIncomeTax;
+  const businessTaxTotal = comprehensiveIncomeTax + localIncomeTax;
+
+  // 결과 표시용: Step6에서는 주 세금(taxTotal)을 사용
+  // taxTotal이 이미 위에서 입찰자 유형별로 계산됨
+  // 단, 비용 합계에는 항상 세금 포함
   const totalCosts = acquisitionCostTotal + holdingCostTotal + saleCostTotal + taxTotal;
   const totalInvestment = bidPrice + acquisitionCostTotal + holdingCostTotal + saleCostTotal - acquisitionCosts.loanAmount;
 
@@ -880,7 +966,9 @@ export const calculateResult = (
   return {
     totalInvestment, totalCosts, grossProfit: tradingProfit, netProfit,
     profitRate, annualProfitRate, monthlyProfit, breakEvenPrice, breakEvenRateToAppraisal,
-    acquisitionCostTotal, holdingCostTotal, saleCostTotal, taxTotal, vatPayable, isVatApplicable,
+    acquisitionCostTotal, holdingCostTotal, saleCostTotal,
+    taxTotal: effectiveBidderType === 'individual_trader' ? businessTaxTotal : taxTotal,
+    vatPayable, isVatApplicable,
     taxComparison, maxBidForTargetProfit, maxBidForTargetRate, scenarios,
   };
 };

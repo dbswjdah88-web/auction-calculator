@@ -3,7 +3,7 @@
 import React from 'react';
 import { useCalculatorStore } from '@/store/calculatorStore';
 import { MoneyInput, SectionHeader } from '@/components/ui/inputs';
-import { calcMinimumBidPrice, isVatSubject } from '@/lib/calculator';
+import { calcMinimumBidPrice, isVatSubject, isIndividualTraderEligible } from '@/lib/calculator';
 import type { PropertyType, OccupancyStatus, RegulationZone, HousingCount, BidderType } from '@/types';
 
 // 시/도 목록
@@ -361,27 +361,45 @@ export default function Step1PropertyInfo() {
         {/* 입찰자 구분 */}
         <div className="mb-5">
           <label className="block text-xs font-medium text-slate-400 mb-2">입찰자 구분</label>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {[
-              { value: 'individual' as BidderType, label: '👤 개인', desc: '양도소득세 적용' },
-              { value: 'corporation' as BidderType, label: '🏢 법인', desc: '법인세 + 주택 추가세' },
-            ].map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => updatePropertyInfo({ bidderType: opt.value })}
-                className={`p-3 rounded-xl border text-sm font-medium transition-all text-left
-                  ${
-                    (propertyInfo.bidderType ?? 'individual') === opt.value
-                      ? 'bg-blue-500/20 border-blue-500 text-blue-300'
-                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
-                  }`}
-              >
-                <div className="font-semibold">{opt.label}</div>
-                <div className="text-xs opacity-70 mt-0.5">{opt.desc}</div>
-              </button>
-            ))}
+              { value: 'individual' as BidderType, label: '👤 개인', desc: '양도소득세 적용', always: true },
+              { value: 'individual_trader' as BidderType, label: '🏠 개인\n매매사업자', desc: '주거용 한정\n종합소득세', residential: true },
+              { value: 'corporation' as BidderType, label: '🏢 법인', desc: '법인세 + 주택 추가세', always: true },
+            ].map((opt) => {
+              const isTrader = opt.value === 'individual_trader';
+              const isDisabled = isTrader && !isIndividualTraderEligible(propertyInfo.propertyType);
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  disabled={isDisabled}
+                  onClick={() => !isDisabled && updatePropertyInfo({ bidderType: opt.value })}
+                  className={`p-3 rounded-xl border text-xs font-medium transition-all text-left whitespace-pre-line
+                    ${isDisabled ? 'opacity-40 cursor-not-allowed bg-slate-800/40 border-slate-700 text-slate-600' :
+                      (propertyInfo.bidderType ?? 'individual') === opt.value
+                        ? 'bg-blue-500/20 border-blue-500 text-blue-300'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                    }`}
+                >
+                  <div className="font-semibold text-sm">{opt.label}</div>
+                  <div className="text-xs opacity-70 mt-0.5">{opt.desc}</div>
+                  {isTrader && isDisabled && (
+                    <div className="text-xs text-red-400/70 mt-1">⛔ 주거용 전용</div>
+                  )}
+                </button>
+              );
+            })}
           </div>
+          {/* 개인 매매사업자 선택 시 안내 */}
+          {(propertyInfo.bidderType ?? 'individual') === 'individual_trader' && (
+            <div className="mt-2 p-2.5 bg-amber-900/20 border border-amber-700/40 rounded-lg">
+              <p className="text-xs text-amber-300">
+                💡 <strong>개인 매매사업자</strong>: 아파트·빌라·단독주택·오피스텔 등 주거용 물건에만 적용됩니다.
+                상가·토지·공장 등은 개인 양도소득세가 자동 적용됩니다.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* 규제지역 구분 */}
@@ -466,12 +484,21 @@ export default function Step1PropertyInfo() {
               const zone = propertyInfo.regulationZone ?? 'normal';
               const count = propertyInfo.housingCount ?? 'one';
               const bidder = propertyInfo.bidderType ?? 'individual';
+              const isRes = ['apartment', 'villa', 'house', 'officetel'].includes(propertyInfo.propertyType);
+
               if (bidder === 'corporation') {
-                const isRes = ['apartment', 'villa', 'house', 'officetel'].includes(propertyInfo.propertyType);
                 return (
                   <div className="text-xs text-slate-300">
                     <span className="text-blue-400">법인세</span>: 9%~24% (누진) 
                     {isRes && <span className="text-red-400"> + 주택 추가세 20%p</span>}
+                  </div>
+                );
+              }
+              if (bidder === 'individual_trader') {
+                return (
+                  <div className="text-xs text-amber-300">
+                    <span className="text-amber-400">개인 매매사업자 종합소득세</span>: 6%~45% (누진)<br/>
+                    <span className="text-slate-500 text-xs">※ 비용처리 후 남은 차익에 대해 과세 (양도세 합산 없음)</span>
                   </div>
                 );
               }

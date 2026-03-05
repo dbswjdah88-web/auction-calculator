@@ -516,7 +516,9 @@ export default function Step6Result() {
             <div className="grid grid-cols-1 gap-3">
               {/* 매매사업자 */}
               <div className={`p-4 rounded-xl border ${
-                result.taxComparison.best === 'business'
+                !result.taxComparison.business.eligibleForPropertyType
+                  ? 'bg-slate-800/30 border-slate-700/50 opacity-50'
+                  : result.taxComparison.best === 'business'
                   ? 'bg-amber-900/20 border-amber-600'
                   : 'bg-slate-800 border-slate-700'
               }`}>
@@ -526,9 +528,12 @@ export default function Step6Result() {
                     <div>
                       <p className="text-sm font-semibold text-slate-200">매매사업자</p>
                       <p className="text-xs text-slate-500">종합소득세 (사업소득)</p>
+                      {!result.taxComparison.business.eligibleForPropertyType && (
+                        <p className="text-xs text-red-400/80 mt-0.5">⛔ 이 물건 종류에 적용 불가 (주거용 전용)</p>
+                      )}
                     </div>
                   </div>
-                  {result.taxComparison.best === 'business' && (
+                  {result.taxComparison.best === 'business' && result.taxComparison.business.eligibleForPropertyType && (
                     <span className="px-2 py-0.5 bg-amber-500 text-black text-xs font-bold rounded">최적</span>
                   )}
                 </div>

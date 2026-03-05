@@ -18,6 +18,8 @@ import {
   calcCapitalGainsTaxDetailed,
   calcCorporateTax,
   calcLongTermDeductionRate,
+  isIndividualTraderEligible,
+  resolveEffectiveBidderType,
 } from '@/lib/calculator';
 import type {
   LandBuildingAllocMethod,
@@ -25,6 +27,7 @@ import type {
   PurchaseVatType,
   RegulationZone,
   HousingCount,
+  BidderType,
 } from '@/types';
 import {
   PieChart,
@@ -86,6 +89,12 @@ export default function Step5Tax() {
 
   // 부가세 과세 여부
   const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
+
+  // 입찰자 유형 (비주거용 매매사업자 → 개인으로 강제)
+  const bidderType: BidderType = propertyInfo.bidderType ?? 'individual';
+  // effectiveBidderType: 향후 세금 탭별 표시 분기에 사용
+  void resolveEffectiveBidderType(bidderType, propertyInfo.propertyType);
+  const isTraderEligible = isIndividualTraderEligible(propertyInfo.propertyType);
 
   // 종합소득세 계산
   const taxResult = calcTaxes(
@@ -309,11 +318,28 @@ export default function Step5Tax() {
       </div>
 
       {/* ==============================
-          종합소득세 탭
+          종합소득세 탭 (개인 매매사업자 전용)
       ============================== */}
       {activeTab === 'income' && (
         <div className="space-y-6">
-          {/* 매매차익 표시 */}
+          {/* 매매사업자 주거용 전용 안내 */}
+          {!isTraderEligible ? (
+            <div className="p-3 bg-red-900/20 border border-red-600/50 rounded-xl flex items-start gap-3">
+              <span className="text-xl">⛔</span>
+              <div>
+                <p className="font-semibold text-red-300 text-sm">매매사업자 종합소득세 적용 불가</p>
+                <p className="text-xs text-red-400/80 mt-1">
+                  상가·토지·공장·근린생활시설은 개인 매매사업자 적용 대상이 아닙니다.<br/>
+                  이 물건의 세금은 <strong className="text-blue-300">양도소득세 탭</strong>에서 확인하세요.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="p-3 bg-amber-900/20 border border-amber-600/40 rounded-xl text-xs text-amber-300">
+              📌 개인 매매사업자는 <strong>주거용 부동산(아파트·빌라·단독주택·오피스텔)</strong>에만 적용 가능합니다.
+              비용처리 후 차익에 대해 종합소득세(6%~45%)가 부과되며, 양도소득세와 합산하지 않습니다.
+            </div>
+          )}
           <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
             <div className="flex justify-between items-center">
               <span className="text-sm text-slate-400">매매차익 (매도가 - 낙찰가)</span>

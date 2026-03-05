@@ -15,8 +15,8 @@ export type PropertyType =
 export type OccupancyStatus = 'vacant' | 'tenant' | 'owner';
 export type SaleMethod = 'direct' | 'agent';
 
-/** 입찰자 구분: 개인 vs 법인 */
-export type BidderType = 'individual' | 'corporation';
+/** 입찰자 구분: 개인 / 개인 매매사업자(주거용 한정) / 법인 */
+export type BidderType = 'individual' | 'individual_trader' | 'corporation';
 
 /** 주택 보유 수 (1주택/2주택/3주택이상) */
 export type HousingCount = 'one' | 'two' | 'three_plus';
@@ -289,11 +289,12 @@ export interface CalculationResult {
 
 /** 3가지 세금 구조 비교 */
 export interface TaxComparisonDetail {
-  // 매매사업자 (종합소득세)
+  // 매매사업자 (종합소득세) - 주거용에만 적용
   business: {
     tax: number;
     netProfit: number;
     effectiveRate: number;
+    eligibleForPropertyType: boolean;  // 주거용 여부
   };
   // 개인 양도소득세
   individual: {
