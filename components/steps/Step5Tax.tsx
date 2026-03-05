@@ -15,8 +15,17 @@ import {
   calcVat,
   isVatSubject,
   calcLandBuildingRatio,
+  calcCapitalGainsTaxDetailed,
+  calcCorporateTax,
+  calcLongTermDeductionRate,
 } from '@/lib/calculator';
-import type { LandBuildingAllocMethod, VatInclusionType, PurchaseVatType } from '@/types';
+import type {
+  LandBuildingAllocMethod,
+  VatInclusionType,
+  PurchaseVatType,
+  RegulationZone,
+  HousingCount,
+} from '@/types';
 import {
   PieChart,
   Pie,
@@ -25,7 +34,7 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 
-type ActiveTab = 'income' | 'vat';
+type ActiveTab = 'income' | 'capital_gains' | 'corporation' | 'vat';
 
 export default function Step5Tax() {
   const {
@@ -37,8 +46,10 @@ export default function Step5Tax() {
     saleCosts,
     taxInfo,
     vatInfo,
+    capitalGainsTaxInfo,
     updateTaxInfo,
     updateVatInfo,
+    updateCapitalGainsTaxInfo,
     addCustomItem,
     removeCustomItem,
     updateCustomItem,
@@ -47,12 +58,36 @@ export default function Step5Tax() {
     updateVatCustomItem,
   } = useCalculatorStore();
 
+  const safeCgtInfo = capitalGainsTaxInfo ?? {
+    taxMode: 'individual_cgt' as const,
+    housingCount: 'one' as HousingCount,
+    regulationZone: 'normal' as RegulationZone,
+    isNonbusiness: false,
+    hasLongTermDeduction: true,
+    longTermDeductionRate: 0,
+    autoLongTermDeduction: true,
+    basicDeduction: 2_500_000,
+    deductibleAcquisitionCosts: true,
+    deductibleRepairCosts: false,
+    isOneHousehold: false,
+    residencyYears: 0,
+    corporationType: 'general' as const,
+    corporateTaxBaseIncome: 0,
+    capitalGainsProfit: 0,
+    longTermDeductionAmount: 0,
+    taxableIncome: 0,
+    capitalGainsTax: 0,
+    localCapitalGainsTax: 0,
+    totalTax: 0,
+    netProfit: 0,
+  };
+
   const [activeTab, setActiveTab] = useState<ActiveTab>('income');
 
-  // 부가세 과세 대상 여부
+  // 부가세 과세 여부
   const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
 
-  // 실시간 세금 계산
+  // 종합소득세 계산
   const taxResult = calcTaxes(
     taxInfo,
     bidInfo.bidPrice,
@@ -63,16 +98,51 @@ export default function Step5Tax() {
     saleCosts
   );
 
-  // 실시간 VAT 계산
-  const vatResult = calcVat(
-    vatInfo,
-    saleInfo.expectedSalePrice,
-    bidInfo.bidPrice,
-    isVatApplicable
+  // VAT 계산
+  const vatResult = calcVat(vatInfo, saleInfo.expectedSalePrice, bidInfo.bidPrice, isVatApplicable);
+  const { buildingRatio, landRatio } = calcLandBuildingRatio(vatInfo);
+
+  // 개인 양도소득세 계산
+  const grossProfit = saleInfo.expectedSalePrice - bidInfo.bidPrice;
+  const deductibleForCGT = safeCgtInfo.deductibleAcquisitionCosts
+    ? acquisitionCosts.acquisitionTax +
+      acquisitionCosts.legalScrivenerFee +
+      acquisitionCosts.registrationLicenseTax +
+      acquisitionCosts.stampDuty +
+      (safeCgtInfo.deductibleRepairCosts
+        ? holdingCosts.repairCosts.reduce((s, i) => s + i.amount, 0)
+        : 0)
+    : 0;
+  const cgtProfit = Math.max(0, grossProfit - deductibleForCGT);
+
+  const autoLtdRate = calcLongTermDeductionRate(
+    propertyInfo.propertyType,
+    saleInfo.holdingMonths,
+    safeCgtInfo.isOneHousehold,
+    safeCgtInfo.residencyYears,
+    safeCgtInfo.regulationZone,
+    safeCgtInfo.isNonbusiness
   );
 
-  // 토지/건물 비율 (실시간 반영)
-  const { buildingRatio, landRatio } = calcLandBuildingRatio(vatInfo);
+  const cgtResult = calcCapitalGainsTaxDetailed(
+    cgtProfit,
+    propertyInfo.propertyType,
+    saleInfo.holdingMonths,
+    safeCgtInfo.regulationZone,
+    safeCgtInfo.housingCount,
+    safeCgtInfo.isOneHousehold,
+    safeCgtInfo.residencyYears,
+    safeCgtInfo.isNonbusiness,
+    safeCgtInfo.autoLongTermDeduction ? null : safeCgtInfo.longTermDeductionRate
+  );
+
+  // 법인세 계산
+  const corpResult = calcCorporateTax(
+    grossProfit,
+    propertyInfo.propertyType,
+    safeCgtInfo.corporationType,
+    safeCgtInfo.corporateTaxBaseIncome
+  );
 
   const updateDeductible = (key: keyof typeof taxInfo.deductibleItems, value: boolean) => {
     updateTaxInfo({
@@ -188,11 +258,11 @@ export default function Step5Tax() {
       />
 
       {/* 탭 선택 */}
-      <div className="flex gap-2 p-1 bg-slate-800 rounded-xl border border-slate-700">
+      <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-800 rounded-xl border border-slate-700">
         <button
           type="button"
           onClick={() => setActiveTab('income')}
-          className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-semibold transition-all ${
+          className={`py-2.5 px-2 rounded-lg text-xs font-semibold transition-all ${
             activeTab === 'income'
               ? 'bg-amber-500 text-slate-900 shadow-lg'
               : 'text-slate-400 hover:text-slate-200'
@@ -202,8 +272,30 @@ export default function Step5Tax() {
         </button>
         <button
           type="button"
+          onClick={() => setActiveTab('capital_gains')}
+          className={`py-2.5 px-2 rounded-lg text-xs font-semibold transition-all ${
+            activeTab === 'capital_gains'
+              ? 'bg-blue-500 text-white shadow-lg'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          🏠 양도소득세
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('corporation')}
+          className={`py-2.5 px-2 rounded-lg text-xs font-semibold transition-all ${
+            activeTab === 'corporation'
+              ? 'bg-purple-500 text-white shadow-lg'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          🏢 법인세
+        </button>
+        <button
+          type="button"
           onClick={() => setActiveTab('vat')}
-          className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-semibold transition-all relative ${
+          className={`py-2.5 px-2 rounded-lg text-xs font-semibold transition-all relative ${
             activeTab === 'vat'
               ? 'bg-amber-500 text-slate-900 shadow-lg'
               : 'text-slate-400 hover:text-slate-200'
@@ -351,6 +443,367 @@ export default function Step5Tax() {
                 amount={taxResult.comprehensiveIncomeTax + taxResult.localIncomeTax}
                 isTotal
               />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==============================
+          양도소득세 탭
+      ============================== */}
+      {activeTab === 'capital_gains' && (
+        <div className="space-y-5">
+          {/* 안내 배너 */}
+          <div className="p-3 bg-blue-900/20 border border-blue-600/40 rounded-xl text-xs text-blue-300">
+            📌 개인이 부동산을 양도할 때 납부하는 세금입니다. 매매사업자와 달리 종합소득세와 합산하지 않습니다.
+          </div>
+
+          {/* 매매차익 */}
+          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-slate-400">양도차익 (매도가 - 낙찰가)</span>
+              <span className={`font-mono font-bold ${grossProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {formatCurrencyKorean(grossProfit)}
+              </span>
+            </div>
+          </div>
+
+          {/* 1세대 1주택 비과세 설정 */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-slate-200">🏠 1세대 1주택 비과세 조건</h3>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <div
+                    className={`w-12 h-6 rounded-full transition-colors relative ${
+                      safeCgtInfo.isOneHousehold ? 'bg-emerald-500' : 'bg-slate-600'
+                    }`}
+                    onClick={() => updateCapitalGainsTaxInfo({ isOneHousehold: !safeCgtInfo.isOneHousehold })}
+                  >
+                    <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${
+                      safeCgtInfo.isOneHousehold ? 'left-7' : 'left-1'
+                    }`} />
+                  </div>
+                  <span className="text-sm text-slate-300">1세대 1주택</span>
+                </label>
+                {safeCgtInfo.isOneHousehold && (
+                  <p className="text-xs text-emerald-400 mt-1 ml-14">
+                    ✅ 2년 보유+거주 시 12억 이하 비과세
+                  </p>
+                )}
+              </div>
+              {safeCgtInfo.isOneHousehold && (
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">거주 기간 (년)</label>
+                  <input
+                    type="number"
+                    value={safeCgtInfo.residencyYears || ''}
+                    onChange={(e) => updateCapitalGainsTaxInfo({ residencyYears: Number(e.target.value) || 0 })}
+                    min="0" max="30" step="0.5"
+                    placeholder="거주 년수"
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm
+                      focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 주택 보유 수 & 규제지역 */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-2">주택 보유 수</label>
+              <div className="space-y-1">
+                {[
+                  { value: 'one', label: '1주택' },
+                  { value: 'two', label: '2주택' },
+                  { value: 'three_plus', label: '3주택+' },
+                ].map((hc) => (
+                  <button
+                    key={hc.value}
+                    type="button"
+                    onClick={() => updateCapitalGainsTaxInfo({ housingCount: hc.value as HousingCount })}
+                    className={`w-full py-2 rounded-lg text-xs font-medium border transition-all text-left px-3
+                      ${safeCgtInfo.housingCount === hc.value
+                        ? 'bg-blue-500/20 border-blue-500 text-blue-300'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                      }`}
+                  >
+                    {hc.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-2">지역 구분</label>
+              <div className="space-y-1">
+                {[
+                  { value: 'normal', label: '일반지역' },
+                  { value: 'speculation', label: '투기지역' },
+                  { value: 'overheated', label: '투기과열지구' },
+                  { value: 'land_trade', label: '토지거래허가구역' },
+                ].map((zone) => (
+                  <button
+                    key={zone.value}
+                    type="button"
+                    onClick={() => updateCapitalGainsTaxInfo({ regulationZone: zone.value as RegulationZone })}
+                    className={`w-full py-1.5 rounded-lg text-xs font-medium border transition-all text-left px-3
+                      ${safeCgtInfo.regulationZone === zone.value
+                        ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                      }`}
+                  >
+                    {zone.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 장기보유특별공제 */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-slate-200">📅 장기보유특별공제</h3>
+            <div className="flex gap-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={safeCgtInfo.autoLongTermDeduction}
+                  onChange={() => updateCapitalGainsTaxInfo({ autoLongTermDeduction: true })}
+                  className="accent-blue-500"
+                />
+                <span className="text-sm text-slate-300">
+                  자동계산 ({saleInfo.holdingMonths}개월 → 공제율 {autoLtdRate}%)
+                </span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={!safeCgtInfo.autoLongTermDeduction}
+                  onChange={() => updateCapitalGainsTaxInfo({ autoLongTermDeduction: false })}
+                  className="accent-blue-500"
+                />
+                <span className="text-sm text-slate-300">직접입력</span>
+              </label>
+            </div>
+            {!safeCgtInfo.autoLongTermDeduction && (
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  value={safeCgtInfo.longTermDeductionRate || ''}
+                  onChange={(e) => updateCapitalGainsTaxInfo({ longTermDeductionRate: Number(e.target.value) || 0 })}
+                  min="0" max="80" step="1"
+                  placeholder="공제율 %"
+                  className="w-32 px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm
+                    focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+                <span className="text-sm text-slate-400">% (최대 80%)</span>
+              </div>
+            )}
+          </div>
+
+          {/* 필요경비 공제 */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-slate-200">💰 필요경비 공제 (양도차익 차감)</h3>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer p-3 bg-slate-800 rounded-lg border border-slate-700">
+                <input
+                  type="checkbox"
+                  checked={safeCgtInfo.deductibleAcquisitionCosts}
+                  onChange={(e) => updateCapitalGainsTaxInfo({ deductibleAcquisitionCosts: e.target.checked })}
+                  className="accent-blue-500"
+                />
+                <div>
+                  <span className="text-sm text-slate-300">취득 필요경비 공제</span>
+                  <span className="text-xs text-slate-500 ml-2">(취득세 + 법무사 + 등기비용)</span>
+                  <div className="text-xs text-blue-400 mt-0.5">
+                    = {formatCurrencyKorean(
+                      acquisitionCosts.acquisitionTax +
+                      acquisitionCosts.legalScrivenerFee +
+                      acquisitionCosts.registrationLicenseTax +
+                      acquisitionCosts.stampDuty
+                    )}
+                  </div>
+                </div>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer p-3 bg-slate-800 rounded-lg border border-slate-700">
+                <input
+                  type="checkbox"
+                  checked={safeCgtInfo.deductibleRepairCosts}
+                  onChange={(e) => updateCapitalGainsTaxInfo({ deductibleRepairCosts: e.target.checked })}
+                  className="accent-blue-500"
+                />
+                <div>
+                  <span className="text-sm text-slate-300">자본적 지출 공제</span>
+                  <span className="text-xs text-slate-500 ml-2">(수리/인테리어 - 가치증가분)</span>
+                  <div className="text-xs text-blue-400 mt-0.5">
+                    = {formatCurrencyKorean(holdingCosts.repairCosts.reduce((s, i) => s + i.amount, 0))}
+                  </div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {/* 비사업용 토지 */}
+          {propertyInfo.propertyType === 'land' && (
+            <div>
+              <label className="flex items-center gap-2 cursor-pointer p-3 bg-slate-800 rounded-lg border border-slate-700">
+                <input
+                  type="checkbox"
+                  checked={safeCgtInfo.isNonbusiness}
+                  onChange={(e) => updateCapitalGainsTaxInfo({ isNonbusiness: e.target.checked })}
+                  className="accent-red-500"
+                />
+                <div>
+                  <span className="text-sm text-red-300">비사업용 토지 중과</span>
+                  <span className="text-xs text-slate-500 ml-2">(+10%p 추가세율, 장기보유특별공제 불가)</span>
+                </div>
+              </label>
+            </div>
+          )}
+
+          {/* 양도소득세 계산 결과 */}
+          <div className="p-4 bg-gradient-to-br from-blue-950/50 to-slate-900 border border-blue-700/50 rounded-xl space-y-3">
+            <h3 className="text-sm font-semibold text-blue-300 mb-3">🏠 양도소득세 계산 결과</h3>
+
+            {cgtResult.specialNote && (
+              <div className="p-2.5 bg-blue-900/30 border border-blue-600/40 rounded-lg text-xs text-blue-300">
+                📌 {cgtResult.specialNote}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <CostSummaryRow label="양도차익" amount={cgtProfit} />
+              {cgtResult.longTermDeductionAmount > 0 && (
+                <CostSummaryRow
+                  label={`장기보유특별공제 (${cgtResult.longTermDeductionRate}%)`}
+                  amount={cgtResult.longTermDeductionAmount}
+                />
+              )}
+              <CostSummaryRow label="기본공제" amount={cgtResult.basicDeduction} />
+              <CostSummaryRow label="과세표준" amount={cgtResult.taxBase} isTotal />
+            </div>
+
+            <div className="pt-3 border-t border-slate-700 space-y-2">
+              <div className="p-2 bg-slate-800 rounded-lg text-xs text-slate-400">
+                적용 세율: <strong className="text-blue-300">{cgtResult.taxRate.toFixed(1)}%</strong>
+                {cgtResult.taxBase === 0 && <span className="text-emerald-400 ml-2">✅ 비과세</span>}
+              </div>
+              <CostSummaryRow label="양도소득세" amount={cgtResult.tax} />
+              <CostSummaryRow label="지방소득세 (10%)" amount={cgtResult.localTax} />
+              <CostSummaryRow label="세금 합계" amount={cgtResult.totalTax} isTotal />
+              <div className="pt-2">
+                <div className="flex justify-between">
+                  <span className="text-sm text-slate-400">세후 순수익</span>
+                  <span className={`font-mono font-bold text-sm ${grossProfit - cgtResult.totalTax >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {formatCurrencyKorean(grossProfit - cgtResult.totalTax)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==============================
+          법인세 탭
+      ============================== */}
+      {activeTab === 'corporation' && (
+        <div className="space-y-5">
+          {/* 안내 배너 */}
+          <div className="p-3 bg-purple-900/20 border border-purple-600/40 rounded-xl text-xs text-purple-300">
+            📌 법인이 부동산을 양도할 때 과세됩니다. 주택 취득 법인은 추가 20% 세율이 적용됩니다.
+          </div>
+
+          {/* 매매차익 */}
+          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-slate-400">법인 양도차익</span>
+              <span className={`font-mono font-bold ${grossProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {formatCurrencyKorean(grossProfit)}
+              </span>
+            </div>
+          </div>
+
+          {/* 법인 구분 */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-slate-200">🏢 법인 구분</h3>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { value: 'general', label: '일반법인', desc: '9%~24% (누진)' },
+                { value: 'small_medium', label: '중소기업', desc: '동일 (특례 별도)' },
+              ].map((corp) => (
+                <button
+                  key={corp.value}
+                  type="button"
+                  onClick={() => updateCapitalGainsTaxInfo({ corporationType: corp.value as 'general' | 'small_medium' })}
+                  className={`p-3 rounded-xl border text-left text-sm transition-all
+                    ${safeCgtInfo.corporationType === corp.value
+                      ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                    }`}
+                >
+                  <div className="font-semibold">{corp.label}</div>
+                  <div className="text-xs opacity-70 mt-0.5">{corp.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* 기존 법인 과세표준 */}
+          <MoneyInput
+            label="기존 법인 과세표준 소득 (다른 사업 소득 등)"
+            value={safeCgtInfo.corporateTaxBaseIncome}
+            onChange={(v) => updateCapitalGainsTaxInfo({ corporateTaxBaseIncome: v })}
+            hint="법인세 누진 계산 시 합산됩니다"
+          />
+
+          {/* 법인세 세율 안내 */}
+          <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+            <h4 className="text-xs font-semibold text-slate-400 mb-3">📋 법인세율 (2024)</h4>
+            <div className="space-y-2 text-xs">
+              {[
+                { range: '2억원 이하', rate: '9%' },
+                { range: '2억 ~ 200억', rate: '19%' },
+                { range: '200억 ~ 3,000억', rate: '21%' },
+                { range: '3,000억 초과', rate: '24%' },
+              ].map((bracket) => (
+                <div key={bracket.range} className="flex justify-between py-1 border-b border-slate-700/50">
+                  <span className="text-slate-400">{bracket.range}</span>
+                  <span className="text-purple-300 font-semibold">{bracket.rate}</span>
+                </div>
+              ))}
+            </div>
+            {['apartment', 'villa', 'house', 'officetel'].includes(propertyInfo.propertyType) && (
+              <div className="mt-3 p-2.5 bg-red-900/20 border border-red-600/40 rounded-lg text-xs text-red-300">
+                ⚠️ 주택 취득 법인: 법인세 + 추가 20%p 세율 적용
+              </div>
+            )}
+          </div>
+
+          {/* 법인세 계산 결과 */}
+          <div className="p-4 bg-gradient-to-br from-purple-950/50 to-slate-900 border border-purple-700/50 rounded-xl space-y-3">
+            <h3 className="text-sm font-semibold text-purple-300 mb-3">🏢 법인세 계산 결과</h3>
+
+            <div className="space-y-2">
+              <CostSummaryRow label="법인 양도차익" amount={grossProfit} />
+              <CostSummaryRow label="법인세 (누진)" amount={corpResult.corporateTax} />
+              <CostSummaryRow label="지방소득세 (10%)" amount={corpResult.localTax} />
+              {corpResult.housingSpecialTax > 0 && (
+                <CostSummaryRow label="주택 추가세 (20%)" amount={corpResult.housingSpecialTax} />
+              )}
+              <CostSummaryRow label="세금 합계" amount={corpResult.totalTax} isTotal />
+            </div>
+
+            <div className="pt-3 border-t border-slate-700 space-y-2">
+              <div className="p-2 bg-slate-800 rounded-lg text-xs text-slate-400">
+                실효세율: <strong className="text-purple-300">{corpResult.effectiveRate.toFixed(1)}%</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-sm text-slate-400">세후 순수익</span>
+                <span className={`font-mono font-bold text-sm ${grossProfit - corpResult.totalTax >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {formatCurrencyKorean(grossProfit - corpResult.totalTax)}
+                </span>
+              </div>
             </div>
           </div>
         </div>

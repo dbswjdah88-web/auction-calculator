@@ -1,8 +1,7 @@
 // ====================================
-// 부동산 경매 입찰가 계산기 - 타입 정의
+// 부동산 경매 입찰가 계산기 - 타입 정의 v3
 // ====================================
 
-// 물건 종류
 export type PropertyType =
   | 'apartment'     // 아파트
   | 'officetel'     // 오피스텔
@@ -13,18 +12,36 @@ export type PropertyType =
   | 'neighborhood'  // 근린생활시설
   | 'factory';      // 공장
 
-// 점유 상태
 export type OccupancyStatus = 'vacant' | 'tenant' | 'owner';
-
-// 매도 방식
 export type SaleMethod = 'direct' | 'agent';
 
-// 자유 입력 항목 (항목명 + 금액)
+/** 입찰자 구분: 개인 vs 법인 */
+export type BidderType = 'individual' | 'corporation';
+
+/** 주택 보유 수 (1주택/2주택/3주택이상) */
+export type HousingCount = 'one' | 'two' | 'three_plus';
+
+/** 양도소득세 과세 방식 선택 */
+export type CapitalGainsTaxMode =
+  | 'business'        // 매매사업자 종합소득세
+  | 'individual_cgt'  // 개인 양도소득세
+  | 'corporation';    // 법인세
+
+/** 지역 구분 (주택 양도세 중과 판단) */
+export type RegulationZone =
+  | 'normal'          // 일반지역
+  | 'speculation'     // 투기지역
+  | 'overheated'      // 투기과열지구
+  | 'land_trade';     // 토지거래허가구역
+
+/** 법인 구분 */
+export type CorporationType = 'general' | 'small_medium'; // 일반법인/중소기업
+
 export interface CustomCostItem {
   id: string;
   name: string;
   amount: number;
-  included: boolean; // 비용처리 포함 여부
+  included: boolean;
 }
 
 // ====================================
@@ -32,84 +49,96 @@ export interface CustomCostItem {
 // ====================================
 export interface PropertyInfo {
   propertyType: PropertyType;
-  siDo: string;           // 시/도
-  siGunGu: string;        // 시/군/구
-  appraisalValue: number; // 감정가
-  minimumBidPrice: number; // 최저입찰가
-  failedBidCount: number; // 유찰 횟수
-  depreciationRate: number; // 체감율 (20 또는 30)
+  siDo: string;
+  siGunGu: string;
+  appraisalValue: number;
+  minimumBidPrice: number;
+  failedBidCount: number;
+  depreciationRate: number;
   occupancyStatus: OccupancyStatus;
-  tenantDeposit: number;  // 임차인 보증금
-  priorRightAmount: number; // 선순위 권리분석 금액
-  areaM2: number;         // 전용면적 (㎡)
-  areaType: 'under85' | 'over85'; // 85㎡ 기준
+  tenantDeposit: number;
+  priorRightAmount: number;
+  areaM2: number;
+  areaType: 'under85' | 'over85';
+  // 신규: 규제지역
+  regulationZone: RegulationZone;
+  // 신규: 주택 보유 수 (양도세 중과 적용 시)
+  housingCount: HousingCount;
+  // 신규: 입찰자 구분
+  bidderType: BidderType;
+  // 신규: 법인 구분
+  corporationType: CorporationType;
 }
 
 // ====================================
 // B. 입찰가 설정
 // ====================================
 export interface BidInfo {
-  bidPrice: number;       // 입찰 희망가
-  bidRateToAppraisal: number; // 감정가 대비 낙찰가율 (%)
-  bidRateToMinimum: number;   // 최저가 대비 입찰가 비율 (%)
+  bidPrice: number;
+  bidRateToAppraisal: number;
+  bidRateToMinimum: number;
 }
 
 // ====================================
 // C. 매도 예상가 설정
 // ====================================
 export interface SaleInfo {
-  expectedSalePrice: number; // 예상 매도가
-  holdingMonths: number;     // 예상 보유 기간 (개월)
-  saleMethod: SaleMethod;    // 매도 방식
+  expectedSalePrice: number;
+  holdingMonths: number;
+  saleMethod: SaleMethod;
 }
 
 // ====================================
 // D. 취득 시 비용
 // ====================================
+export interface EvictionCostDetail {
+  movingFee: number;          // 이사비
+  litigationFee: number;      // 명도소송비
+  enforcementFee: number;     // 강제집행비
+  keyMoney: number;           // 합의금/위로금
+  cleanupFee: number;         // 청소/폐기물처리비
+}
+
+export interface RepairCostDetail {
+  id: string;
+  category: 'plumbing' | 'electrical' | 'interior' | 'exterior' | 'appliance' | 'other';
+  name: string;
+  amount: number;
+  included: boolean;
+}
+
 export interface AcquisitionCosts {
-  // 자동 계산
-  acquisitionTax: number;       // 취득세
-  courtDepositInterestLoss: number; // 입찰보증금 이자 손실
-  stampDuty: number;            // 인지대
-  deliveryFee: number;          // 송달료
-  registrationLicenseTax: number; // 등록면허세
-  localEducationTax: number;    // 지방교육세 (등록면허세의 20%)
-  courtRevenuestamp: number;    // 대법원 수입인지
-  registrationFee: number;      // 등기신청 수수료
-
-  // 수동 입력
-  legalScrivenerFee: number;    // 법무사 비용
-  evictionCost: {
-    movingFee: number;          // 이사비
-    litigationFee: number;      // 명도소송비
-    enforcementFee: number;     // 강제집행비
-  };
-  unpaidManagementFee: number;  // 미납 관리비
-
-  // 대출
-  loanAmount: number;           // 대출 금액
-  loanRate: number;             // 대출 금리 (연 %)
-  loanMonths: number;           // 대출 기간 (개월)
-  loanInterest: number;         // 대출 이자 (자동 계산)
-  loanSetupFee: number;         // 대출 설정비
-
-  // 기타
+  acquisitionTax: number;
+  courtDepositInterestLoss: number;
+  stampDuty: number;
+  deliveryFee: number;
+  registrationLicenseTax: number;
+  localEducationTax: number;
+  courtRevenuestamp: number;
+  registrationFee: number;
+  legalScrivenerFee: number;
+  evictionCost: EvictionCostDetail;
+  unpaidManagementFee: number;
+  loanAmount: number;
+  loanRate: number;
+  loanMonths: number;
+  loanInterest: number;
+  loanSetupFee: number;
   customItems: CustomCostItem[];
-
-  // 대출 이율 계산용
-  depositLockMonths: number;    // 보증금 묶이는 기간 (일)
-  annualInterestRate: number;   // 연이율 (%)
+  depositLockMonths: number;
+  annualInterestRate: number;
 }
 
 // ====================================
 // E. 보유 시 비용
 // ====================================
 export interface HoldingCosts {
-  propertyTax: number;          // 재산세 (연간)
-  comprehensiveRealEstateTax: number; // 종합부동산세
-  maintenanceFeeMonthly: number; // 월 관리비/공과금
-  repairCosts: CustomCostItem[]; // 수리/인테리어 (항목별)
-  insuranceFee: number;         // 보험료
+  propertyTax: number;
+  comprehensiveRealEstateTax: number;
+  maintenanceFeeMonthly: number;
+  repairCosts: CustomCostItem[];
+  repairCostDetails: RepairCostDetail[];  // 신규: 카테고리별 수리비
+  insuranceFee: number;
   customItems: CustomCostItem[];
 }
 
@@ -117,17 +146,19 @@ export interface HoldingCosts {
 // F. 매도 시 비용
 // ====================================
 export interface SaleCosts {
-  agentCommission: number;      // 중개보수 (자동 계산)
-  agentCommissionRate: number;  // 중개보수율 (%)
-  cancelRegistrationFee: number; // 말소 비용
+  agentCommission: number;
+  agentCommissionRate: number;
+  cancelRegistrationFee: number;
+  // 신규: 중개보수 세부 분리
+  agentCommissionBuy: number;   // 매수 측 중개보수 (취득 비용)
+  agentCommissionSell: number;  // 매도 측 중개보수 (매도 비용)
   customItems: CustomCostItem[];
 }
 
 // ====================================
-// G. 매매사업자 세금
+// G-1. 매매사업자 종합소득세 정보
 // ====================================
 export interface TaxInfo {
-  // 비용처리 항목 체크박스
   deductibleItems: {
     acquisitionTax: boolean;
     legalScrivenerFee: boolean;
@@ -138,31 +169,65 @@ export interface TaxInfo {
     repairCosts: boolean;
     agentCommission: boolean;
     propertyTax: boolean;
-    vehicleExpense: boolean;   // 차량유지비
-    communicationFee: boolean; // 통신비
-    officeRent: boolean;       // 사무실 임차료
-    advertisingFee: boolean;   // 광고비
+    vehicleExpense: boolean;
+    communicationFee: boolean;
+    officeRent: boolean;
+    advertisingFee: boolean;
   };
-  
-  // 기타 사업경비
-  vehicleExpense: number;       // 차량유지비
-  communicationFee: number;     // 통신비
-  officeRent: number;           // 사무실 임차료
-  advertisingFee: number;       // 광고비
+  vehicleExpense: number;
+  communicationFee: number;
+  officeRent: number;
+  advertisingFee: number;
   customBusinessExpenses: CustomCostItem[];
+  existingIncome: number;
+  basicDeduction: number;
+  tradingProfit: number;
+  totalDeductible: number;
+  taxBase: number;
+  comprehensiveIncomeTax: number;
+  localIncomeTax: number;
+}
 
-  // 기존 소득 합산
-  existingIncome: number;       // 다른 사업소득/근로소득 합산
+// ====================================
+// G-2. 양도소득세 상세 설정 (개인)
+// ====================================
+export interface CapitalGainsTaxInfo {
+  /** 과세 방식 선택 */
+  taxMode: CapitalGainsTaxMode;
 
-  // 기본공제
-  basicDeduction: number;       // 기본공제 (150만원 기본)
+  // 개인 양도소득세 관련
+  housingCount: HousingCount;       // 주택 보유 수
+  regulationZone: RegulationZone;   // 규제지역
+  isNonbusiness: boolean;           // 비사업용 토지 여부
+  hasLongTermDeduction: boolean;    // 장기보유특별공제 적용 여부
 
-  // 계산 결과
-  tradingProfit: number;        // 매매차익
-  totalDeductible: number;      // 비용처리 합계
-  taxBase: number;              // 과세표준
-  comprehensiveIncomeTax: number; // 종합소득세
-  localIncomeTax: number;       // 지방소득세
+  // 장기보유특별공제율 (직접 입력 or 자동계산)
+  longTermDeductionRate: number;    // % (0~80)
+  autoLongTermDeduction: boolean;   // 자동계산 여부
+
+  // 기본공제 (250만원)
+  basicDeduction: number;
+
+  // 취득가액 공제 (필요경비)
+  deductibleAcquisitionCosts: boolean;  // 취득세/법무사 등 공제 여부
+  deductibleRepairCosts: boolean;       // 수리비 공제 여부
+
+  // 1세대 1주택 비과세 (2년 거주)
+  isOneHousehold: boolean;
+  residencyYears: number;
+
+  // 법인 관련
+  corporationType: CorporationType;
+  corporateTaxBaseIncome: number;   // 법인 기타 과세표준 소득 (누진 적용용)
+
+  // 계산 결과 (자동)
+  capitalGainsProfit: number;       // 양도차익
+  longTermDeductionAmount: number;  // 장기보유특별공제액
+  taxableIncome: number;            // 과세표준
+  capitalGainsTax: number;          // 양도소득세
+  localCapitalGainsTax: number;     // 지방소득세
+  totalTax: number;                 // 합계
+  netProfit: number;                // 세후 순수익
 }
 
 // ====================================
@@ -177,20 +242,14 @@ export interface CalculatorState {
   holdingCosts: HoldingCosts;
   saleCosts: SaleCosts;
   taxInfo: TaxInfo;
+  capitalGainsTaxInfo: CapitalGainsTaxInfo;
   vatInfo: VatInfo;
-  
-  // 고급 기능
-  targetProfit: number;         // 목표 순수익
-  targetProfitRate: number;     // 목표 수익률
-  
-  // 저장 이력
+  targetProfit: number;
+  targetProfitRate: number;
   savedCalculations: SavedCalculation[];
-  
-  // 최근 낙찰 통계
-  areaAvgBidRate: number;       // 지역 평균 낙찰가율
+  areaAvgBidRate: number;
 }
 
-// 저장된 계산 이력
 export interface SavedCalculation {
   id: string;
   name: string;
@@ -203,118 +262,121 @@ export interface SavedCalculation {
 // 계산 결과
 // ====================================
 export interface CalculationResult {
-  totalInvestment: number;      // 총 투자금 (실투자금)
-  totalCosts: number;           // 총 비용 합계
-  grossProfit: number;          // 매매차익 (세전)
-  netProfit: number;            // 순수익 (세후)
-  profitRate: number;           // 수익률 (%)
-  annualProfitRate: number;     // 연환산 수익률 (%)
-  monthlyProfit: number;        // 월평균 수익
-  breakEvenPrice: number;       // 손익분기점 매도가
-  breakEvenRateToAppraisal: number; // 손익분기점 감정가 대비 비율
+  totalInvestment: number;
+  totalCosts: number;
+  grossProfit: number;
+  netProfit: number;
+  profitRate: number;
+  annualProfitRate: number;
+  monthlyProfit: number;
+  breakEvenPrice: number;
+  breakEvenRateToAppraisal: number;
 
-  // 비용 상세
   acquisitionCostTotal: number;
   holdingCostTotal: number;
   saleCostTotal: number;
   taxTotal: number;
-  vatPayable: number;             // 납부 부가세 (별도 항목)
-  isVatApplicable: boolean;       // 부가세 과세 여부
+  vatPayable: number;
+  isVatApplicable: boolean;
 
-  // 역산
-  maxBidForTargetProfit: number;    // 목표 순수익 달성 최대 입찰가
-  maxBidForTargetRate: number;      // 목표 수익률 달성 최대 입찰가
+  // 세금 비교 결과 (3가지)
+  taxComparison: TaxComparisonDetail;
 
-  // 시나리오 (입찰가율 60~100%)
+  maxBidForTargetProfit: number;
+  maxBidForTargetRate: number;
   scenarios: ScenarioRow[];
 }
 
-// 시나리오 테이블 행
+/** 3가지 세금 구조 비교 */
+export interface TaxComparisonDetail {
+  // 매매사업자 (종합소득세)
+  business: {
+    tax: number;
+    netProfit: number;
+    effectiveRate: number;
+  };
+  // 개인 양도소득세
+  individual: {
+    tax: number;
+    netProfit: number;
+    effectiveRate: number;
+    breakdown: {
+      capitalGains: number;
+      longTermDeduction: number;
+      basicDeduction: number;
+      taxBase: number;
+      cgt: number;
+      localTax: number;
+    };
+  };
+  // 법인세
+  corporation: {
+    tax: number;
+    netProfit: number;
+    effectiveRate: number;
+    type: CorporationType;
+  };
+  best: 'business' | 'individual' | 'corporation';
+  bestSavings: number;
+}
+
 export interface ScenarioRow {
-  bidRatePercent: number;       // 입찰가율 (%)
-  bidPrice: number;             // 입찰가
-  netProfit: number;            // 순수익
-  profitRate: number;           // 수익률
-  annualProfitRate: number;     // 연환산 수익률
+  bidRatePercent: number;
+  bidPrice: number;
+  netProfit: number;
+  profitRate: number;
+  annualProfitRate: number;
 }
 
-// 대출 레버리지 분석
 export interface LeverageAnalysis {
-  ltvRatio: number;             // LTV 비율 (%)
-  loanAmount: number;           // 대출금
-  ownCapital: number;           // 자기자본
-  netProfit: number;            // 순수익
-  roe: number;                  // 자기자본수익률 (ROE)
-  totalProfitRate: number;      // 전체 수익률
+  ltvRatio: number;
+  loanAmount: number;
+  ownCapital: number;
+  netProfit: number;
+  roe: number;
+  totalProfitRate: number;
+}
+
+export interface TaxComparison {
+  businessTax: number;
+  individualTax: number;
+  businessNetProfit: number;
+  individualNetProfit: number;
+  advantageous: 'business' | 'individual';
+  difference: number;
 }
 
 // ====================================
-// VAT (부가가치세) 정보
+// VAT
 // ====================================
-
-// 토지/건물 안분 방법
 export type LandBuildingAllocMethod = 'standard' | 'appraisal' | 'direct';
-
-// 매도가 VAT 포함 여부
-export type VatInclusionType = 'exclusive' | 'inclusive'; // exclusive=별도, inclusive=포함
-
-// 낙찰가 부가세 포함 여부
+export type VatInclusionType = 'exclusive' | 'inclusive';
 export type PurchaseVatType = 'included' | 'separate' | 'none';
 
 export interface VatInfo {
-  // 과세 여부 (자동 판단)
-  isVatApplicable: boolean;       // 부가세 과세 대상 여부
-
-  // 토지/건물 안분 방법
+  isVatApplicable: boolean;
   allocMethod: LandBuildingAllocMethod;
-
-  // 방법 1: 기준시가 안분
-  landStandardPrice: number;       // 토지 기준시가
-  buildingStandardPrice: number;   // 건물 기준시가
-  // 도우미: 개별공시지가
-  landUnitPrice: number;           // 개별공시지가 (원/㎡)
-  landAreaM2: number;              // 토지 면적 (㎡)
-
-  // 방법 2: 감정평가 안분
-  landAppraisalPrice: number;      // 토지 감정가
-  buildingAppraisalPrice: number;  // 건물 감정가
-
-  // 방법 3: 직접 입력
-  buildingDirectAmount: number;    // 건물분 직접 입력
-  landDirectAmount: number;        // 토지분 직접 입력
-
-  // 계산 결과 (자동)
-  buildingRatio: number;           // 건물 비율 (0~1)
-  landRatio: number;               // 토지 비율 (0~1)
-  buildingSaleAmount: number;      // 건물분 매도가
-  landSaleAmount: number;          // 토지분 매도가
-
-  // 매도 부가세
-  vatInclusionType: VatInclusionType;  // VAT 별도/포함
-  outputVat: number;               // 매출세액 (건물분 매도가 × 10%)
-  buildingSupplyAmount: number;    // 건물분 공급가액 (VAT 제외)
-
-  // 취득(매입) 부가세
-  purchaseVatType: PurchaseVatType;  // 낙찰가 부가세 포함 여부
-  inputVatFromPurchase: number;    // 취득 매입세액
-
-  // 기타 매입세액 공제
-  inputVatInterior: number;        // 인테리어/수리 매입세액
-  inputVatLegalScrivener: number;  // 법무사 매입세액
-  inputVatAgentCommission: number; // 중개보수 매입세액
-  customInputVatItems: Array<{ id: string; name: string; amount: number }>; // 기타
-
-  // 최종 납부/환급
-  totalInputVat: number;           // 매입세액 합계
-  vatPayable: number;              // 납부 부가세 (양수=납부, 음수=환급)
-}
-
-// 세금 비교 (매매사업자 vs 개인 양도세)
-export interface TaxComparison {
-  businessTax: number;          // 매매사업자 세금 (종합소득세 + 지방소득세)
-  individualTax: number;        // 개인 양도세 (양도소득세 + 지방소득세)
-  businessNetProfit: number;    // 매매사업자 순수익
-  individualNetProfit: number;  // 개인 순수익
-  advantageous: 'business' | 'individual'; // 유리한 쪽
-  difference: number;           // 차이
+  landStandardPrice: number;
+  buildingStandardPrice: number;
+  landUnitPrice: number;
+  landAreaM2: number;
+  landAppraisalPrice: number;
+  buildingAppraisalPrice: number;
+  buildingDirectAmount: number;
+  landDirectAmount: number;
+  buildingRatio: number;
+  landRatio: number;
+  buildingSaleAmount: number;
+  landSaleAmount: number;
+  vatInclusionType: VatInclusionType;
+  outputVat: number;
+  buildingSupplyAmount: number;
+  purchaseVatType: PurchaseVatType;
+  inputVatFromPurchase: number;
+  inputVatInterior: number;
+  inputVatLegalScrivener: number;
+  inputVatAgentCommission: number;
+  customInputVatItems: Array<{ id: string; name: string; amount: number }>;
+  totalInputVat: number;
+  vatPayable: number;
 }

@@ -1,5 +1,6 @@
 // ====================================
-// 계산 유틸리티 함수들
+// 계산 유틸리티 함수들 v3
+// 법인/개인/매매사업자 세금 + 양도소득세 정밀계산
 // ====================================
 
 import type {
@@ -11,17 +12,21 @@ import type {
   HoldingCosts,
   SaleCosts,
   TaxInfo,
+  CapitalGainsTaxInfo,
   VatInfo,
   CalculationResult,
   ScenarioRow,
   LeverageAnalysis,
   TaxComparison,
+  TaxComparisonDetail,
+  RegulationZone,
+  HousingCount,
+  CorporationType,
 } from '@/types';
 
 // ====================================
 // 금액 포맷 유틸리티
 // ====================================
-
 export const formatCurrency = (amount: number): string => {
   if (isNaN(amount) || amount === 0) return '0';
   return new Intl.NumberFormat('ko-KR').format(Math.round(amount));
@@ -31,16 +36,13 @@ export const formatCurrencyKorean = (amount: number): string => {
   if (isNaN(amount) || amount === 0) return '0원';
   const abs = Math.abs(amount);
   const sign = amount < 0 ? '-' : '';
-
   const eok = Math.floor(abs / 100_000_000);
   const man = Math.floor((abs % 100_000_000) / 10_000);
   const rest = abs % 10_000;
-
   let result = '';
   if (eok > 0) result += `${formatCurrency(eok)}억 `;
   if (man > 0) result += `${formatCurrency(man)}만 `;
   if (rest > 0) result += `${formatCurrency(rest)}`;
-
   return `${sign}${result.trim()}원`;
 };
 
@@ -55,12 +57,12 @@ export const parseNumber = (value: string): number => {
 };
 
 // ====================================
-// 유찰 횟수에 따른 최저입찰가 계산
+// 최저입찰가 계산
 // ====================================
 export const calcMinimumBidPrice = (
   appraisalValue: number,
   failedBidCount: number,
-  depreciationRate: number // 20 또는 30
+  depreciationRate: number
 ): number => {
   const rate = 1 - depreciationRate / 100;
   return appraisalValue * Math.pow(rate, failedBidCount);
@@ -77,59 +79,31 @@ export const calcAcquisitionTaxRate = (
   const isResidential = ['apartment', 'villa', 'house', 'officetel'].includes(propertyType);
 
   if (!isResidential) {
-    // 상가/근생/공장/토지: 4.6%
     const base = bidPrice * 0.04;
-    const localEdu = base * 0.1; // 지방교육세 4% × 10% = 0.4%
-    const rural = bidPrice * 0.002; // 농어촌특별세 0.2%
-    return {
-      rate: 4.6,
-      breakdown: {
-        acquisitionTax: base,
-        localEduTax: localEdu,
-        ruralSpecialTax: rural,
-      },
-    };
+    const localEdu = base * 0.1;
+    const rural = bidPrice * 0.002;
+    return { rate: 4.6, breakdown: { acquisitionTax: base, localEduTax: localEdu, ruralSpecialTax: rural } };
   }
 
-  // 주거용 (매매사업자 중과 배제)
-  // 가격 구간별 세율 결정
   let baseRate: number;
-
   if (bidPrice <= 600_000_000) {
-    // 6억 이하
-    baseRate = 0.01; // 1%
+    baseRate = 0.01;
   } else if (bidPrice <= 900_000_000) {
-    // 6억 초과 ~ 9억 이하: 슬라이딩 세율
-    // 세율 = (취득가액 × 2/3억 - 3) / 100
     const slidingRate = ((bidPrice / 100_000_000) * (2 / 3) - 3) / 100;
     baseRate = Math.max(0.01, Math.min(0.03, slidingRate));
   } else {
-    // 9억 초과: 3%
     baseRate = 0.03;
   }
 
   const acquisitionTax = bidPrice * baseRate;
-
-  // 지방교육세: 취득세 × 10%
   const localEdu = acquisitionTax * 0.1;
-
-  // 농어촌특별세
   let rural = 0;
-  if (areaType === 'over85') {
-    // 85㎡ 초과: 0.2%
-    rural = bidPrice * 0.002;
-  }
-  // 85㎡ 이하: 농어촌특별세 면제
+  if (areaType === 'over85') rural = bidPrice * 0.002;
 
   const totalRate = ((acquisitionTax + localEdu + rural) / bidPrice) * 100;
-
   return {
     rate: parseFloat(totalRate.toFixed(2)),
-    breakdown: {
-      acquisitionTax,
-      localEduTax: localEdu,
-      ruralSpecialTax: rural,
-    },
+    breakdown: { acquisitionTax, localEduTax: localEdu, ruralSpecialTax: rural },
   };
 };
 
@@ -143,7 +117,7 @@ export const calcAcquisitionTax = (
 };
 
 // ====================================
-// 인지대 계산 (물건가액 기준)
+// 인지대
 // ====================================
 export const calcStampDuty = (price: number): number => {
   if (price < 10_000_000) return 50_000;
@@ -158,32 +132,28 @@ export const calcStampDuty = (price: number): number => {
 };
 
 // ====================================
-// 중개보수 계산
+// 중개보수
 // ====================================
 export const calcAgentCommissionRate = (salePrice: number): number => {
-  if (salePrice < 50_000_000) return 0.006;       // 0.6%
-  if (salePrice < 200_000_000) return 0.005;      // 0.5%
-  if (salePrice < 900_000_000) return 0.004;      // 0.4%
-  if (salePrice < 1_200_000_000) return 0.005;    // 0.5%
-  if (salePrice < 1_500_000_000) return 0.006;    // 0.6%
-  return 0.007;                                   // 0.7%
+  if (salePrice < 50_000_000) return 0.006;
+  if (salePrice < 200_000_000) return 0.005;
+  if (salePrice < 900_000_000) return 0.004;
+  if (salePrice < 1_200_000_000) return 0.005;
+  if (salePrice < 1_500_000_000) return 0.006;
+  return 0.007;
 };
 
 export const calcAgentCommission = (salePrice: number, saleMethod: string): number => {
   if (saleMethod === 'direct') return 0;
-
   const rate = calcAgentCommissionRate(salePrice);
   const calculated = salePrice * rate;
-
-  // 상한선 적용
   if (salePrice < 50_000_000) return Math.min(calculated, 250_000);
   if (salePrice < 200_000_000) return Math.min(calculated, 800_000);
-
   return calculated;
 };
 
 // ====================================
-// 재산세 계산 (간략화)
+// 재산세
 // ====================================
 export const calcPropertyTax = (
   propertyType: PropertyType,
@@ -194,43 +164,29 @@ export const calcPropertyTax = (
   const isResidential = ['apartment', 'villa', 'house', 'officetel'].includes(propertyType);
 
   if (isResidential) {
-    // 주택: 공시가격 × 60% (과표) × 세율
     const taxBase = bidPrice * 0.6;
-    if (taxBase <= 60_000_000) {
-      annualTax = taxBase * 0.001;
-    } else if (taxBase <= 150_000_000) {
-      annualTax = 60_000 + (taxBase - 60_000_000) * 0.0015;
-    } else if (taxBase <= 300_000_000) {
-      annualTax = 195_000 + (taxBase - 150_000_000) * 0.0025;
-    } else {
-      annualTax = 570_000 + (taxBase - 300_000_000) * 0.004;
-    }
+    if (taxBase <= 60_000_000) annualTax = taxBase * 0.001;
+    else if (taxBase <= 150_000_000) annualTax = 60_000 + (taxBase - 60_000_000) * 0.0015;
+    else if (taxBase <= 300_000_000) annualTax = 195_000 + (taxBase - 150_000_000) * 0.0025;
+    else annualTax = 570_000 + (taxBase - 300_000_000) * 0.004;
   } else {
-    // 상가/토지 등: 별도합산 기준 간략화
-    annualTax = bidPrice * 0.004; // 0.4% 대략
+    annualTax = bidPrice * 0.004;
   }
-
-  // 보유 기간 안분
   return (annualTax * holdingMonths) / 12;
 };
 
 // ====================================
-// 대출 이자 계산
+// 대출 이자
 // ====================================
-export const calcLoanInterest = (
-  loanAmount: number,
-  annualRate: number, // %
-  holdingMonths: number
-): number => {
+export const calcLoanInterest = (loanAmount: number, annualRate: number, holdingMonths: number): number => {
   return loanAmount * (annualRate / 100) * (holdingMonths / 12);
 };
 
 // ====================================
-// 종합소득세 계산
+// 종합소득세 (매매사업자) - 2024 세율
 // ====================================
 export const calcComprehensiveIncomeTax = (taxBase: number): number => {
   if (taxBase <= 0) return 0;
-
   if (taxBase <= 14_000_000) return taxBase * 0.06;
   if (taxBase <= 50_000_000) return taxBase * 0.15 - 1_260_000;
   if (taxBase <= 88_000_000) return taxBase * 0.24 - 5_760_000;
@@ -241,52 +197,341 @@ export const calcComprehensiveIncomeTax = (taxBase: number): number => {
   return taxBase * 0.45 - 65_940_000;
 };
 
-// ====================================
-// 개인 양도소득세 계산 (비교용)
-// ====================================
-export const calcCapitalGainsTax = (
-  profit: number,
-  holdingMonths: number
-): number => {
-  if (profit <= 0) return 0;
-
-  const holdingYears = holdingMonths / 12;
-
-  // 기본공제 250만원
-  const basicDeduction = 2_500_000;
-  const taxBase = Math.max(0, profit - basicDeduction);
-
-  // 단기 (1년 미만) vs 장기
-  if (holdingYears < 1) {
-    // 1년 미만 단기: 70%
-    return taxBase * 0.70;
-  } else if (holdingYears < 2) {
-    // 1~2년: 60%
-    return taxBase * 0.60;
-  } else {
-    // 2년 이상: 일반과세 (6~45%)
-    if (taxBase <= 14_000_000) return taxBase * 0.06;
-    if (taxBase <= 50_000_000) return taxBase * 0.15 - 1_260_000;
-    if (taxBase <= 88_000_000) return taxBase * 0.24 - 5_760_000;
-    if (taxBase <= 150_000_000) return taxBase * 0.35 - 15_440_000;
-    if (taxBase <= 300_000_000) return taxBase * 0.38 - 19_940_000;
-    if (taxBase <= 500_000_000) return taxBase * 0.40 - 25_940_000;
-    if (taxBase <= 1_000_000_000) return taxBase * 0.42 - 35_940_000;
-    return taxBase * 0.45 - 65_940_000;
-  }
+/** 종합소득세 실효세율 텍스트 */
+export const getIncomeTaxBracketLabel = (taxBase: number): string => {
+  if (taxBase <= 0) return '과세 없음';
+  if (taxBase <= 14_000_000) return '6% (1,400만원 이하)';
+  if (taxBase <= 50_000_000) return '15% (5,000만원 이하)';
+  if (taxBase <= 88_000_000) return '24% (8,800만원 이하)';
+  if (taxBase <= 150_000_000) return '35% (1.5억원 이하)';
+  if (taxBase <= 300_000_000) return '38% (3억원 이하)';
+  if (taxBase <= 500_000_000) return '40% (5억원 이하)';
+  if (taxBase <= 1_000_000_000) return '42% (10억원 이하)';
+  return '45% (10억원 초과)';
 };
 
 // ====================================
-// 취득비용 합계
+// 장기보유특별공제율 계산
+// ====================================
+/**
+ * 주택: 1세대 1주택 (거주요건 충족 시 최대 80%)
+ * 일반 자산: 보유기간 기준 (최대 30%)
+ * 비사업용 토지: 공제 없음
+ */
+export const calcLongTermDeductionRate = (
+  propertyType: PropertyType,
+  holdingMonths: number,
+  isOneHousehold: boolean,
+  residencyYears: number,
+  regulationZone: RegulationZone,
+  isNonbusiness: boolean
+): number => {
+  if (isNonbusiness && propertyType === 'land') return 0; // 비사업용 토지: 공제 없음
+
+  const holdingYears = holdingMonths / 12;
+
+  const isResidential = ['apartment', 'villa', 'house', 'officetel'].includes(propertyType);
+
+  // 1세대 1주택 특례 (2년 거주 요건)
+  if (isResidential && isOneHousehold && residencyYears >= 2) {
+    // 보유기간 공제 + 거주기간 공제 (각 4%, 합산 최대 80%)
+    const holdingDeduction = Math.min(Math.floor(holdingYears) * 4, 40); // 보유: 연 4%, 최대 40%
+    const residencyDeduction = Math.min(Math.floor(residencyYears) * 4, 40); // 거주: 연 4%, 최대 40%
+    return Math.min(holdingDeduction + residencyDeduction, 80);
+  }
+
+  // 일반 주택 (다주택 / 거주요건 미충족)
+  if (isResidential) {
+    // 투기과열지구 등 규제지역 다주택: 장기보유특별공제 배제
+    if (
+      regulationZone !== 'normal' &&
+      (holdingYears >= 1) // 단기 중과는 별도 처리
+    ) {
+      return 0; // 규제지역 다주택: 장기보유특별공제 배제
+    }
+    // 일반: 보유 3년부터 연 2%, 최대 30%
+    if (holdingYears < 3) return 0;
+    return Math.min(Math.floor(holdingYears) * 2, 30);
+  }
+
+  // 비주거용 (상가/토지 등)
+  if (holdingYears < 3) return 0;
+  if (holdingYears < 4) return 6;
+  if (holdingYears < 5) return 8;
+  if (holdingYears < 6) return 10;
+  if (holdingYears < 7) return 12;
+  if (holdingYears < 8) return 14;
+  if (holdingYears < 9) return 16;
+  if (holdingYears < 10) return 18;
+  if (holdingYears < 11) return 20;
+  if (holdingYears < 12) return 22;
+  if (holdingYears < 13) return 24;
+  if (holdingYears < 14) return 26;
+  if (holdingYears < 15) return 28;
+  return 30; // 15년 이상: 30%
+};
+
+// ====================================
+// 개인 양도소득세 정밀 계산
+// ====================================
+export interface CapitalGainsCalcResult {
+  capitalGains: number;          // 양도차익
+  longTermDeductionAmount: number; // 장기보유특별공제액
+  longTermDeductionRate: number;  // 공제율 (%)
+  basicDeduction: number;         // 기본공제 (250만원)
+  taxBase: number;                // 과세표준
+  taxRate: number;                // 적용 세율 (%)
+  tax: number;                    // 양도소득세
+  localTax: number;               // 지방소득세 (10%)
+  totalTax: number;               // 합계
+  specialNote: string;            // 중과세 등 특이사항
+}
+
+export const calcCapitalGainsTaxDetailed = (
+  profit: number,                   // 양도차익 (매도가 - 낙찰가 - 필요경비)
+  propertyType: PropertyType,
+  holdingMonths: number,
+  regulationZone: RegulationZone,
+  housingCount: HousingCount,
+  isOneHousehold: boolean,
+  residencyYears: number,
+  isNonbusiness: boolean,
+  longTermDeductionRateOverride: number | null = null  // null이면 자동계산
+): CapitalGainsCalcResult => {
+  if (profit <= 0) {
+    return {
+      capitalGains: profit, longTermDeductionAmount: 0, longTermDeductionRate: 0,
+      basicDeduction: 2_500_000, taxBase: 0, taxRate: 0, tax: 0, localTax: 0, totalTax: 0,
+      specialNote: '양도차익 없음',
+    };
+  }
+
+  const holdingYears = holdingMonths / 12;
+  const isResidential = ['apartment', 'villa', 'house', 'officetel'].includes(propertyType);
+  let specialNote = '';
+  let taxRate = 0;
+  let tax = 0;
+
+  // ── 1세대 1주택 비과세 판단 ──
+  if (isResidential && isOneHousehold && housingCount === 'one' && residencyYears >= 2 && holdingYears >= 2) {
+    // 12억 이하 비과세 (2023년 이후), 초과분만 과세
+    const taxableGains = profit > 1_200_000_000
+      ? profit * (1 - 1_200_000_000 / profit)
+      : 0;
+    if (taxableGains <= 0) {
+      return {
+        capitalGains: profit, longTermDeductionAmount: 0, longTermDeductionRate: 0,
+        basicDeduction: 0, taxBase: 0, taxRate: 0, tax: 0, localTax: 0, totalTax: 0,
+        specialNote: '1세대 1주택 비과세 (12억 이하)',
+      };
+    }
+    profit = taxableGains;
+    specialNote = '1세대 1주택 (12억 초과분 과세)';
+  }
+
+  // ── 장기보유특별공제 ──
+  const ltdRate = longTermDeductionRateOverride !== null
+    ? longTermDeductionRateOverride
+    : calcLongTermDeductionRate(propertyType, holdingMonths, isOneHousehold, residencyYears, regulationZone, isNonbusiness);
+  const longTermDeductionAmount = profit * (ltdRate / 100);
+  const afterLTD = profit - longTermDeductionAmount;
+
+  // ── 기본공제 250만원 ──
+  const basicDeduction = 2_500_000;
+  const taxBase = Math.max(0, afterLTD - basicDeduction);
+
+  // ── 세율 결정 ──
+  if (isResidential) {
+    // 주택: 단기 중과 + 다주택 중과
+    if (holdingYears < 1) {
+      // 1년 미만: 70% (규제지역 주택 포함)
+      taxRate = 70;
+      specialNote += ' / 1년 미만 단기 70%';
+    } else if (holdingYears < 2) {
+      // 1~2년 미만: 60%
+      taxRate = 60;
+      specialNote += ' / 1~2년 60%';
+    } else {
+      // 2년 이상 보유
+      // 다주택 중과: 규제지역 내 2주택 +20%p, 3주택 이상 +30%p
+      let surcharge = 0;
+      if (regulationZone !== 'normal') {
+        if (housingCount === 'two') { surcharge = 20; specialNote += ' / 규제지역 2주택 +20%p 중과'; }
+        else if (housingCount === 'three_plus') { surcharge = 30; specialNote += ' / 규제지역 3주택 +30%p 중과'; }
+      }
+      // 투기지역 토지거래허가구역: 추가 10%p (중복 적용)
+      if (regulationZone === 'speculation' || regulationZone === 'land_trade') {
+        surcharge = Math.max(surcharge, 10);
+      }
+
+      if (surcharge > 0) {
+        // 중과: 기본세율 + 가산세율 (누진 + 가산)
+        const baseTax = calcProgressiveTax(taxBase);
+        tax = baseTax + taxBase * (surcharge / 100);
+        taxRate = taxBase > 0 ? (tax / taxBase) * 100 : 0;
+      } else {
+        tax = calcProgressiveTax(taxBase);
+        taxRate = taxBase > 0 ? (tax / taxBase) * 100 : 0;
+      }
+      const localTax = tax * 0.1;
+      return {
+        capitalGains: profit,
+        longTermDeductionAmount,
+        longTermDeductionRate: ltdRate,
+        basicDeduction,
+        taxBase,
+        taxRate: parseFloat(taxRate.toFixed(1)),
+        tax,
+        localTax,
+        totalTax: tax + localTax,
+        specialNote: specialNote.replace(/^\s*\/\s*/, ''),
+      };
+    }
+    // 단기 중과 (고정 세율)
+    tax = taxBase * (taxRate / 100);
+  } else if (propertyType === 'land') {
+    // 토지: 비사업용 중과 +10%p
+    if (isNonbusiness) {
+      const baseTax = calcProgressiveTax(taxBase);
+      tax = baseTax + taxBase * 0.10;
+      specialNote += ' / 비사업용 토지 +10%p 중과';
+      taxRate = taxBase > 0 ? (tax / taxBase) * 100 : 0;
+    } else {
+      // 사업용 토지: 1년 미만 50%, 1~2년 40%, 2년 이상 누진
+      if (holdingYears < 1) { taxRate = 50; tax = taxBase * 0.50; specialNote += ' / 사업용 토지 1년 미만 50%'; }
+      else if (holdingYears < 2) { taxRate = 40; tax = taxBase * 0.40; specialNote += ' / 사업용 토지 1~2년 40%'; }
+      else { tax = calcProgressiveTax(taxBase); taxRate = taxBase > 0 ? (tax / taxBase) * 100 : 0; }
+    }
+  } else {
+    // 상가/근생/공장/오피스텔 (비주거 부동산)
+    // 1년 미만 50%, 1~2년 40%, 2년 이상 누진
+    if (holdingYears < 1) { taxRate = 50; tax = taxBase * 0.50; specialNote += ' / 1년 미만 단기 50%'; }
+    else if (holdingYears < 2) { taxRate = 40; tax = taxBase * 0.40; specialNote += ' / 1~2년 40%'; }
+    else { tax = calcProgressiveTax(taxBase); taxRate = taxBase > 0 ? (tax / taxBase) * 100 : 0; }
+  }
+
+  const localTax = tax * 0.1;
+  return {
+    capitalGains: profit,
+    longTermDeductionAmount,
+    longTermDeductionRate: ltdRate,
+    basicDeduction,
+    taxBase,
+    taxRate: parseFloat(taxRate.toFixed(1)),
+    tax,
+    localTax,
+    totalTax: tax + localTax,
+    specialNote: specialNote.replace(/^\s*\/\s*/, ''),
+  };
+};
+
+/** 누진세 계산 (양도소득세/종합소득세 공통) */
+const calcProgressiveTax = (base: number): number => {
+  if (base <= 0) return 0;
+  if (base <= 14_000_000) return base * 0.06;
+  if (base <= 50_000_000) return base * 0.15 - 1_260_000;
+  if (base <= 88_000_000) return base * 0.24 - 5_760_000;
+  if (base <= 150_000_000) return base * 0.35 - 15_440_000;
+  if (base <= 300_000_000) return base * 0.38 - 19_940_000;
+  if (base <= 500_000_000) return base * 0.40 - 25_940_000;
+  if (base <= 1_000_000_000) return base * 0.42 - 35_940_000;
+  return base * 0.45 - 65_940_000;
+};
+
+// 하위 호환용
+export const calcCapitalGainsTax = (profit: number, holdingMonths: number): number => {
+  if (profit <= 0) return 0;
+  const holdingYears = holdingMonths / 12;
+  const basicDeduction = 2_500_000;
+  const taxBase = Math.max(0, profit - basicDeduction);
+  if (holdingYears < 1) return taxBase * 0.70;
+  if (holdingYears < 2) return taxBase * 0.60;
+  return calcProgressiveTax(taxBase);
+};
+
+// ====================================
+// 법인세 계산 (2024)
+// ====================================
+/**
+ * 법인세율 (2024):
+ * - 2억 이하: 9%
+ * - 2억~200억: 19%
+ * - 200억~3000억: 21%
+ * - 3000억 초과: 24%
+ *
+ * 주택 취득 법인 추가세금:
+ * - 법인이 주택 취득 시 취득세 12% 중과
+ * - 법인이 주택 양도 시 토지 등 양도소득: 일반 법인세 + 추가 10%
+ */
+export interface CorporateTaxResult {
+  taxableIncome: number;
+  corporateTax: number;
+  localTax: number;         // 지방소득세 10%
+  housingSpecialTax: number; // 주택 양도 추가세 (법인)
+  totalTax: number;
+  effectiveRate: number;    // 실효세율
+}
+
+export const calcCorporateTax = (
+  profit: number,               // 법인 양도차익
+  propertyType: PropertyType,
+  corporationType: CorporationType,
+  existingCorporateIncome: number = 0  // 기존 법인 과세표준
+): CorporateTaxResult => {
+  if (profit <= 0) {
+    return { taxableIncome: 0, corporateTax: 0, localTax: 0, housingSpecialTax: 0, totalTax: 0, effectiveRate: 0 };
+  }
+
+  const isResidential = ['apartment', 'villa', 'house', 'officetel'].includes(propertyType);
+  const taxableIncome = profit + existingCorporateIncome;
+
+  // 법인세 계산 (누진)
+  let corporateTax = 0;
+  const prevTax = calcCorporateProgressiveTax(existingCorporateIncome);
+  const totalTaxBeforeExtra = calcCorporateProgressiveTax(taxableIncome);
+  corporateTax = Math.max(0, totalTaxBeforeExtra - prevTax); // 부동산 관련 세금만 분리
+
+  const localTax = corporateTax * 0.1; // 지방소득세 10%
+
+  // 주택 법인 양도: 추가 세율 20% (일반 법인세에 추가)
+  // 2022.01 이후 취득한 법인 주택 처분 시
+  let housingSpecialTax = 0;
+  if (isResidential) {
+    housingSpecialTax = profit * 0.20; // 추가 20%
+  }
+
+  const total = corporateTax + localTax + housingSpecialTax;
+  const effectiveRate = profit > 0 ? (total / profit) * 100 : 0;
+
+  return {
+    taxableIncome: profit,
+    corporateTax,
+    localTax,
+    housingSpecialTax,
+    totalTax: total,
+    effectiveRate: parseFloat(effectiveRate.toFixed(1)),
+  };
+};
+
+const calcCorporateProgressiveTax = (income: number): number => {
+  if (income <= 0) return 0;
+  if (income <= 200_000_000) return income * 0.09;
+  if (income <= 20_000_000_000) return 18_000_000 + (income - 200_000_000) * 0.19;
+  if (income <= 300_000_000_000) return 3_780_000_000 + (income - 20_000_000_000) * 0.21;
+  return 66_780_000_000 + (income - 300_000_000_000) * 0.24;
+};
+
+// ====================================
+// 비용 합계 함수들
 // ====================================
 export const calcAcquisitionCostTotal = (costs: AcquisitionCosts): number => {
   const eviction =
     costs.evictionCost.movingFee +
     costs.evictionCost.litigationFee +
-    costs.evictionCost.enforcementFee;
-
+    costs.evictionCost.enforcementFee +
+    (costs.evictionCost.keyMoney ?? 0) +
+    (costs.evictionCost.cleanupFee ?? 0);
   const customTotal = costs.customItems.reduce((sum, item) => sum + item.amount, 0);
-
   return (
     costs.acquisitionTax +
     costs.courtDepositInterestLoss +
@@ -305,36 +550,28 @@ export const calcAcquisitionCostTotal = (costs: AcquisitionCosts): number => {
   );
 };
 
-// ====================================
-// 보유비용 합계
-// ====================================
-export const calcHoldingCostTotal = (
-  costs: HoldingCosts,
-  holdingMonths: number
-): number => {
+export const calcHoldingCostTotal = (costs: HoldingCosts, holdingMonths: number): number => {
   const repairTotal = costs.repairCosts.reduce((sum, item) => sum + item.amount, 0);
+  const repairDetailTotal = (costs.repairCostDetails ?? []).reduce((sum, item) => sum + item.amount, 0);
   const customTotal = costs.customItems.reduce((sum, item) => sum + item.amount, 0);
-
   return (
     costs.propertyTax +
     costs.comprehensiveRealEstateTax +
     costs.maintenanceFeeMonthly * holdingMonths +
     repairTotal +
+    repairDetailTotal +
     costs.insuranceFee +
     customTotal
   );
 };
 
-// ====================================
-// 매도비용 합계
-// ====================================
 export const calcSaleCostTotal = (costs: SaleCosts): number => {
   const customTotal = costs.customItems.reduce((sum, item) => sum + item.amount, 0);
   return costs.agentCommission + costs.cancelRegistrationFee + customTotal;
 };
 
 // ====================================
-// 세금 계산 (매매사업자)
+// 매매사업자 종합소득세 계산
 // ====================================
 export const calcTaxes = (
   taxInfo: TaxInfo,
@@ -346,8 +583,6 @@ export const calcTaxes = (
   saleCosts: SaleCosts
 ): { comprehensiveIncomeTax: number; localIncomeTax: number; tradingProfit: number; totalDeductible: number; taxBase: number } => {
   const tradingProfit = salePrice - bidPrice;
-
-  // 비용처리 합계 계산
   let totalDeductible = 0;
   const d = taxInfo.deductibleItems;
 
@@ -365,12 +600,15 @@ export const calcTaxes = (
     totalDeductible +=
       acquisitionCosts.evictionCost.movingFee +
       acquisitionCosts.evictionCost.litigationFee +
-      acquisitionCosts.evictionCost.enforcementFee;
+      acquisitionCosts.evictionCost.enforcementFee +
+      (acquisitionCosts.evictionCost.keyMoney ?? 0) +
+      (acquisitionCosts.evictionCost.cleanupFee ?? 0);
   }
   if (d.unpaidManagementFee) totalDeductible += acquisitionCosts.unpaidManagementFee;
   if (d.loanInterest) totalDeductible += acquisitionCosts.loanInterest;
   if (d.repairCosts) {
     totalDeductible += holdingCosts.repairCosts.reduce((sum, item) => sum + item.amount, 0);
+    totalDeductible += (holdingCosts.repairCostDetails ?? []).reduce((sum, item) => sum + item.amount, 0);
   }
   if (d.agentCommission) totalDeductible += saleCosts.agentCommission;
   if (d.propertyTax) totalDeductible += holdingCosts.propertyTax;
@@ -378,61 +616,138 @@ export const calcTaxes = (
   if (d.communicationFee) totalDeductible += taxInfo.communicationFee;
   if (d.officeRent) totalDeductible += taxInfo.officeRent;
   if (d.advertisingFee) totalDeductible += taxInfo.advertisingFee;
-
   const customBusinessExpTotal = taxInfo.customBusinessExpenses
     .filter((item) => item.included)
     .reduce((sum, item) => sum + item.amount, 0);
   totalDeductible += customBusinessExpTotal;
 
-  // 과세표준 = 매매차익 - 비용처리 합계 - 기본공제 + 기존 소득 합산
   const taxBase = Math.max(
     0,
     tradingProfit - totalDeductible - taxInfo.basicDeduction + taxInfo.existingIncome
   );
-
   const comprehensiveIncomeTax = calcComprehensiveIncomeTax(taxBase);
   const localIncomeTax = comprehensiveIncomeTax * 0.1;
 
+  return { comprehensiveIncomeTax, localIncomeTax, tradingProfit, totalDeductible, taxBase };
+};
+
+// ====================================
+// 3가지 세금 구조 비교
+// ====================================
+export const calcTaxComparisonDetail = (
+  params: {
+    bidPrice: number;
+    salePrice: number;
+    acquisitionCosts: AcquisitionCosts;
+    holdingCosts: HoldingCosts;
+    holdingMonths: number;
+    saleCosts: SaleCosts;
+    taxInfo: TaxInfo;
+    propertyInfo: PropertyInfo;
+    capitalGainsTaxInfo: CapitalGainsTaxInfo;
+  }
+): TaxComparisonDetail => {
+  const { bidPrice, salePrice, acquisitionCosts, holdingCosts, holdingMonths, saleCosts, taxInfo, propertyInfo, capitalGainsTaxInfo } = params;
+
+  // 공통 기준 매매차익
+  const grossProfit = salePrice - bidPrice;
+
+  // ── 1. 매매사업자 종합소득세 ──
+  const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
+    taxInfo, bidPrice, salePrice, acquisitionCosts, holdingCosts, holdingMonths, saleCosts
+  );
+  const businessTax = comprehensiveIncomeTax + localIncomeTax;
+  const businessNetProfit = grossProfit - businessTax;
+  const businessEffective = grossProfit > 0 ? (businessTax / grossProfit) * 100 : 0;
+
+  // ── 2. 개인 양도소득세 ──
+  // 필요경비 차감
+  const deductibleForCGT =
+    acquisitionCosts.acquisitionTax +
+    acquisitionCosts.legalScrivenerFee +
+    acquisitionCosts.registrationLicenseTax +
+    acquisitionCosts.stampDuty +
+    (capitalGainsTaxInfo.deductibleRepairCosts
+      ? holdingCosts.repairCosts.reduce((s, i) => s + i.amount, 0)
+      : 0);
+  const cgtProfit = Math.max(0, grossProfit - (capitalGainsTaxInfo.deductibleAcquisitionCosts ? deductibleForCGT : 0));
+
+  const ltdRateOverride = capitalGainsTaxInfo.autoLongTermDeduction
+    ? null
+    : capitalGainsTaxInfo.longTermDeductionRate;
+
+  const cgtResult = calcCapitalGainsTaxDetailed(
+    cgtProfit,
+    propertyInfo.propertyType,
+    holdingMonths,
+    capitalGainsTaxInfo.regulationZone,
+    capitalGainsTaxInfo.housingCount,
+    capitalGainsTaxInfo.isOneHousehold,
+    capitalGainsTaxInfo.residencyYears,
+    capitalGainsTaxInfo.isNonbusiness,
+    ltdRateOverride
+  );
+  const individualTax = cgtResult.totalTax;
+  const individualNetProfit = grossProfit - individualTax;
+  const individualEffective = grossProfit > 0 ? (individualTax / grossProfit) * 100 : 0;
+
+  // ── 3. 법인세 ──
+  const corpResult = calcCorporateTax(
+    grossProfit,
+    propertyInfo.propertyType,
+    capitalGainsTaxInfo.corporationType,
+    capitalGainsTaxInfo.corporateTaxBaseIncome
+  );
+  const corpNetProfit = grossProfit - corpResult.totalTax;
+  const corpEffective = grossProfit > 0 ? (corpResult.totalTax / grossProfit) * 100 : 0;
+
+  // ── 최적 비교 ──
+  const nets = [
+    { key: 'business' as const, net: businessNetProfit },
+    { key: 'individual' as const, net: individualNetProfit },
+    { key: 'corporation' as const, net: corpNetProfit },
+  ];
+  nets.sort((a, b) => b.net - a.net);
+  const best = nets[0].key;
+  const bestSavings = nets[0].net - nets[nets.length - 1].net;
+
   return {
-    comprehensiveIncomeTax,
-    localIncomeTax,
-    tradingProfit,
-    totalDeductible,
-    taxBase,
+    business: { tax: businessTax, netProfit: businessNetProfit, effectiveRate: businessEffective },
+    individual: {
+      tax: individualTax,
+      netProfit: individualNetProfit,
+      effectiveRate: individualEffective,
+      breakdown: {
+        capitalGains: cgtResult.capitalGains,
+        longTermDeduction: cgtResult.longTermDeductionAmount,
+        basicDeduction: cgtResult.basicDeduction,
+        taxBase: cgtResult.taxBase,
+        cgt: cgtResult.tax,
+        localTax: cgtResult.localTax,
+      },
+    },
+    corporation: {
+      tax: corpResult.totalTax,
+      netProfit: corpNetProfit,
+      effectiveRate: corpEffective,
+      type: capitalGainsTaxInfo.corporationType,
+    },
+    best,
+    bestSavings,
   };
 };
 
 // ====================================
-// VAT (부가가치세) 계산
+// VAT 계산
 // ====================================
-
-/**
- * 물건 종류 + 면적에 따라 부가가치세 과세 대상 여부 판단
- * - 주거용(아파트/빌라/다세대/단독) 85㎡ 초과: 과세
- * - 오피스텔: 주거용으로 사용 시 85㎡ 초과 과세 (여기서는 동일 기준 적용)
- * - 상가/근생/공장: 면적 무관 항상 과세
- * - 토지: 항상 면세
- */
-export const isVatSubject = (
-  propertyType: PropertyType,
-  areaType: 'under85' | 'over85'
-): boolean => {
-  if (propertyType === 'land') return false; // 토지 면세
-  if (['commercial', 'neighborhood', 'factory'].includes(propertyType)) return true; // 상가/근생/공장 항상 과세
-  // 주거용 + 오피스텔: 85㎡ 초과만 과세
+export const isVatSubject = (propertyType: PropertyType, areaType: 'under85' | 'over85'): boolean => {
+  if (propertyType === 'land') return false;
+  if (['commercial', 'neighborhood', 'factory'].includes(propertyType)) return true;
   return areaType === 'over85';
 };
 
-/**
- * 토지/건물 안분 비율 계산
- * returns { buildingRatio, landRatio }
- */
-export const calcLandBuildingRatio = (
-  vatInfo: VatInfo
-): { buildingRatio: number; landRatio: number } => {
-  let landVal = 0;
-  let buildingVal = 0;
-
+export const calcLandBuildingRatio = (vatInfo: VatInfo): { buildingRatio: number; landRatio: number } => {
+  let landVal = 0, buildingVal = 0;
   if (vatInfo.allocMethod === 'standard') {
     landVal = vatInfo.landStandardPrice;
     buildingVal = vatInfo.buildingStandardPrice;
@@ -440,42 +755,21 @@ export const calcLandBuildingRatio = (
     landVal = vatInfo.landAppraisalPrice;
     buildingVal = vatInfo.buildingAppraisalPrice;
   } else {
-    // direct: 직접 비율로 계산
     const total = vatInfo.buildingDirectAmount + vatInfo.landDirectAmount;
     if (total <= 0) return { buildingRatio: 0.5, landRatio: 0.5 };
-    return {
-      buildingRatio: vatInfo.buildingDirectAmount / total,
-      landRatio: vatInfo.landDirectAmount / total,
-    };
+    return { buildingRatio: vatInfo.buildingDirectAmount / total, landRatio: vatInfo.landDirectAmount / total };
   }
-
   const total = landVal + buildingVal;
   if (total <= 0) return { buildingRatio: 0.5, landRatio: 0.5 };
-  return {
-    buildingRatio: buildingVal / total,
-    landRatio: landVal / total,
-  };
+  return { buildingRatio: buildingVal / total, landRatio: landVal / total };
 };
 
-/**
- * VAT 전체 계산
- */
 export const calcVat = (
   vatInfo: VatInfo,
   expectedSalePrice: number,
   bidPrice: number,
   isApplicable: boolean
-): {
-  buildingRatio: number;
-  landRatio: number;
-  buildingSaleAmount: number;
-  landSaleAmount: number;
-  buildingSupplyAmount: number;
-  outputVat: number;
-  inputVatFromPurchase: number;
-  totalInputVat: number;
-  vatPayable: number;
-} => {
+) => {
   if (!isApplicable) {
     return {
       buildingRatio: 0, landRatio: 1,
@@ -484,67 +778,32 @@ export const calcVat = (
       inputVatFromPurchase: 0, totalInputVat: 0, vatPayable: 0,
     };
   }
-
   const { buildingRatio, landRatio } = calcLandBuildingRatio(vatInfo);
-
-  // 건물분 / 토지분 매도가
   const buildingSaleAmount = expectedSalePrice * buildingRatio;
   const landSaleAmount = expectedSalePrice * landRatio;
-
-  // 매출세액 계산
-  let outputVat = 0;
-  let buildingSupplyAmount = buildingSaleAmount;
-
+  let outputVat = 0, buildingSupplyAmount = buildingSaleAmount;
   if (vatInfo.vatInclusionType === 'exclusive') {
-    // VAT 별도: 매도가에 VAT 미포함 → 매출세액 = 건물분 × 10%
     outputVat = buildingSaleAmount * 0.1;
     buildingSupplyAmount = buildingSaleAmount;
   } else {
-    // VAT 포함: 건물분 공급가액 = 건물분 / 1.1, VAT = 공급가액 × 10%
     buildingSupplyAmount = buildingSaleAmount / 1.1;
     outputVat = buildingSupplyAmount * 0.1;
   }
-
-  // 취득 매입세액
-  let inputVatFromPurchase = 0;
   const buildingBidAmount = bidPrice * buildingRatio;
-
-  if (vatInfo.purchaseVatType === 'included') {
-    inputVatFromPurchase = (buildingBidAmount / 1.1) * 0.1;
-  } else if (vatInfo.purchaseVatType === 'separate') {
-    inputVatFromPurchase = buildingBidAmount * 0.1;
-  }
-
-  // 기타 매입세액 (각 금액의 10/110)
-  const inputVatInterior = vatInfo.inputVatInterior > 0
-    ? (vatInfo.inputVatInterior / 1.1) * 0.1 : 0;
-  const inputVatLegalScrivener = vatInfo.inputVatLegalScrivener > 0
-    ? (vatInfo.inputVatLegalScrivener / 1.1) * 0.1 : 0;
-  const inputVatAgentCommission = vatInfo.inputVatAgentCommission > 0
-    ? (vatInfo.inputVatAgentCommission / 1.1) * 0.1 : 0;
+  let inputVatFromPurchase = 0;
+  if (vatInfo.purchaseVatType === 'included') inputVatFromPurchase = (buildingBidAmount / 1.1) * 0.1;
+  else if (vatInfo.purchaseVatType === 'separate') inputVatFromPurchase = buildingBidAmount * 0.1;
+  const inputVatInterior = vatInfo.inputVatInterior > 0 ? (vatInfo.inputVatInterior / 1.1) * 0.1 : 0;
+  const inputVatLegal = vatInfo.inputVatLegalScrivener > 0 ? (vatInfo.inputVatLegalScrivener / 1.1) * 0.1 : 0;
+  const inputVatAgent = vatInfo.inputVatAgentCommission > 0 ? (vatInfo.inputVatAgentCommission / 1.1) * 0.1 : 0;
   const customInputVat = vatInfo.customInputVatItems.reduce(
     (sum, item) => sum + (item.amount > 0 ? (item.amount / 1.1) * 0.1 : 0), 0
   );
-
-  const totalInputVat =
-    inputVatFromPurchase +
-    inputVatInterior +
-    inputVatLegalScrivener +
-    inputVatAgentCommission +
-    customInputVat;
-
+  const totalInputVat = inputVatFromPurchase + inputVatInterior + inputVatLegal + inputVatAgent + customInputVat;
   const vatPayable = outputVat - totalInputVat;
-
   return {
-    buildingRatio,
-    landRatio,
-    buildingSaleAmount,
-    landSaleAmount,
-    buildingSupplyAmount,
-    outputVat,
-    inputVatFromPurchase,
-    totalInputVat,
-    vatPayable,
+    buildingRatio, landRatio, buildingSaleAmount, landSaleAmount,
+    buildingSupplyAmount, outputVat, inputVatFromPurchase, totalInputVat, vatPayable,
   };
 };
 
@@ -559,6 +818,7 @@ export const calculateResult = (
   holdingCosts: HoldingCosts,
   saleCosts: SaleCosts,
   taxInfo: TaxInfo,
+  capitalGainsTaxInfo: CapitalGainsTaxInfo,
   vatInfo: VatInfo,
   targetProfit: number,
   targetProfitRate: number
@@ -566,208 +826,126 @@ export const calculateResult = (
   const { bidPrice } = bidInfo;
   const { expectedSalePrice, holdingMonths } = saleInfo;
 
-  // VAT 과세 여부 판단
   const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
-
-  // VAT 계산
   const vatResult = calcVat(vatInfo, expectedSalePrice, bidPrice, isVatApplicable);
   const { vatPayable } = vatResult;
 
-  // VAT 포함 매도인 경우 실질 매도가 조정
-  // VAT 포함이면 건물분에서 VAT 만큼 실질 수령액 감소
   const effectiveSalePrice =
     isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
-      ? expectedSalePrice - vatResult.outputVat  // 실질 수령액 = 매도가 - 내포된 VAT
+      ? expectedSalePrice - vatResult.outputVat
       : expectedSalePrice;
 
   const acquisitionCostTotal = calcAcquisitionCostTotal(acquisitionCosts);
   const holdingCostTotal = calcHoldingCostTotal(holdingCosts, holdingMonths);
   const saleCostTotal = calcSaleCostTotal(saleCosts);
 
-  // 종합소득세: VAT 포함 매도 시 공급가액 기준으로 매매차익 산정
   const saleAmountForTax = isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
-    ? vatResult.buildingSupplyAmount + vatResult.landSaleAmount   // 공급가액 + 토지분
+    ? vatResult.buildingSupplyAmount + vatResult.landSaleAmount
     : expectedSalePrice;
 
-  const { comprehensiveIncomeTax, localIncomeTax, tradingProfit } =
-    calcTaxes(
-      taxInfo,
-      bidPrice,
-      saleAmountForTax,
-      acquisitionCosts,
-      holdingCosts,
-      holdingMonths,
-      saleCosts
-    );
-
+  const { comprehensiveIncomeTax, localIncomeTax, tradingProfit } = calcTaxes(
+    taxInfo, bidPrice, saleAmountForTax, acquisitionCosts, holdingCosts, holdingMonths, saleCosts
+  );
   const taxTotal = comprehensiveIncomeTax + localIncomeTax;
-
-  // 총비용: 취득+보유+매도+소득세 (VAT는 별도 항목)
   const totalCosts = acquisitionCostTotal + holdingCostTotal + saleCostTotal + taxTotal;
+  const totalInvestment = bidPrice + acquisitionCostTotal + holdingCostTotal + saleCostTotal - acquisitionCosts.loanAmount;
 
-  // 총 투자금 = 낙찰가 + 모든 비용 - 대출금
-  const totalInvestment =
-    bidPrice +
-    acquisitionCostTotal +
-    holdingCostTotal +
-    saleCostTotal -
-    acquisitionCosts.loanAmount;
+  const netProfit = effectiveSalePrice - bidPrice - acquisitionCostTotal - holdingCostTotal - saleCostTotal - taxTotal - vatPayable;
 
-  // 순수익 = 실질매도가 - 낙찰가 - 취득비용 - 보유비용 - 매도비용 - 소득세 - 납부VAT
-  const netProfit =
-    effectiveSalePrice -
-    bidPrice -
-    acquisitionCostTotal -
-    holdingCostTotal -
-    saleCostTotal -
-    taxTotal -
-    vatPayable;
-
-  const profitRate =
-    totalInvestment > 0 ? (netProfit / totalInvestment) * 100 : 0;
-  const annualProfitRate =
-    holdingMonths > 0 ? profitRate * (12 / holdingMonths) : 0;
+  const profitRate = totalInvestment > 0 ? (netProfit / totalInvestment) * 100 : 0;
+  const annualProfitRate = holdingMonths > 0 ? profitRate * (12 / holdingMonths) : 0;
   const monthlyProfit = holdingMonths > 0 ? netProfit / holdingMonths : 0;
 
-  // 손익분기점 (VAT 납부 포함)
-  const breakEvenPrice =
-    bidPrice + acquisitionCostTotal + holdingCostTotal + saleCostTotal + taxTotal + vatPayable;
-  const breakEvenRateToAppraisal =
-    propertyInfo.appraisalValue > 0
-      ? (breakEvenPrice / propertyInfo.appraisalValue) * 100
-      : 0;
+  const breakEvenPrice = bidPrice + acquisitionCostTotal + holdingCostTotal + saleCostTotal + taxTotal + vatPayable;
+  const breakEvenRateToAppraisal = propertyInfo.appraisalValue > 0
+    ? (breakEvenPrice / propertyInfo.appraisalValue) * 100 : 0;
 
-  // 역산: 목표 순수익 달성 최대 입찰가
+  // 3가지 세금 구조 비교
+  const taxComparison = calcTaxComparisonDetail({
+    bidPrice, salePrice: saleAmountForTax,
+    acquisitionCosts, holdingCosts, holdingMonths, saleCosts,
+    taxInfo, propertyInfo, capitalGainsTaxInfo,
+  });
+
   const maxBidForTargetProfit = findMaxBid(
-    propertyInfo,
-    bidInfo,
-    saleInfo,
-    acquisitionCosts,
-    holdingCosts,
-    saleCosts,
-    taxInfo,
-    vatInfo,
-    targetProfit
+    propertyInfo, bidInfo, saleInfo, acquisitionCosts, holdingCosts, saleCosts, taxInfo, capitalGainsTaxInfo, vatInfo, targetProfit
   );
-
   const maxBidForTargetRate = findMaxBidForRate(
-    propertyInfo,
-    bidInfo,
-    saleInfo,
-    acquisitionCosts,
-    holdingCosts,
-    saleCosts,
-    taxInfo,
-    vatInfo,
-    targetProfitRate
+    propertyInfo, bidInfo, saleInfo, acquisitionCosts, holdingCosts, saleCosts, taxInfo, capitalGainsTaxInfo, vatInfo, targetProfitRate
   );
-
-  // 시나리오 생성
   const scenarios = generateScenarios(
-    propertyInfo,
-    bidInfo,
-    saleInfo,
-    acquisitionCosts,
-    holdingCosts,
-    saleCosts,
-    taxInfo,
-    vatInfo
+    propertyInfo, bidInfo, saleInfo, acquisitionCosts, holdingCosts, saleCosts, taxInfo, capitalGainsTaxInfo, vatInfo
   );
 
   return {
-    totalInvestment,
-    totalCosts,
-    grossProfit: tradingProfit,
-    netProfit,
-    profitRate,
-    annualProfitRate,
-    monthlyProfit,
-    breakEvenPrice,
-    breakEvenRateToAppraisal,
-    acquisitionCostTotal,
-    holdingCostTotal,
-    saleCostTotal,
-    taxTotal,
-    vatPayable,
-    isVatApplicable,
-    maxBidForTargetProfit,
-    maxBidForTargetRate,
-    scenarios,
+    totalInvestment, totalCosts, grossProfit: tradingProfit, netProfit,
+    profitRate, annualProfitRate, monthlyProfit, breakEvenPrice, breakEvenRateToAppraisal,
+    acquisitionCostTotal, holdingCostTotal, saleCostTotal, taxTotal, vatPayable, isVatApplicable,
+    taxComparison, maxBidForTargetProfit, maxBidForTargetRate, scenarios,
   };
 };
 
-  // 역산: 목표 순수익 최대 입찰가 (이진탐색)
+// ====================================
+// 역산 (이진탐색)
+// ====================================
+const buildCostsForBid = (
+  propertyInfo: PropertyInfo, bidPrice: number,
+  baseCosts: AcquisitionCosts, holdingCosts: HoldingCosts, saleCosts: SaleCosts
+): { acq: AcquisitionCosts; sale: SaleCosts } => {
+  const acquisitionTax = calcAcquisitionTax(propertyInfo.propertyType, bidPrice, propertyInfo.areaType);
+  const registrationLicenseTax = bidPrice * 0.002;
+  const localEduTax = registrationLicenseTax * 0.2;
+  const stampDuty = calcStampDuty(bidPrice);
+  return {
+    acq: { ...baseCosts, acquisitionTax, registrationLicenseTax, localEducationTax: localEduTax, stampDuty },
+    sale: { ...saleCosts },
+  };
+};
+
 const findMaxBid = (
-  propertyInfo: PropertyInfo,
-  bidInfo: BidInfo,
-  saleInfo: SaleInfo,
-  baseCosts: AcquisitionCosts,
-  holdingCosts: HoldingCosts,
-  saleCosts: SaleCosts,
-  taxInfo: TaxInfo,
-  vatInfo: VatInfo,
-  targetProfit: number
+  propertyInfo: PropertyInfo, bidInfo: BidInfo, saleInfo: SaleInfo,
+  baseCosts: AcquisitionCosts, holdingCosts: HoldingCosts, saleCosts: SaleCosts,
+  taxInfo: TaxInfo, capitalGainsTaxInfo: CapitalGainsTaxInfo, vatInfo: VatInfo, targetProfit: number
 ): number => {
   if (targetProfit <= 0) return 0;
-
   const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
-
-  let lo = 0;
-  let hi = saleInfo.expectedSalePrice;
-
+  let lo = 0, hi = saleInfo.expectedSalePrice;
   for (let i = 0; i < 50; i++) {
     const mid = (lo + hi) / 2;
     const testCosts = buildCostsForBid(propertyInfo, mid, baseCosts, holdingCosts, saleCosts);
-
     const acqTotal = calcAcquisitionCostTotal(testCosts.acq);
     const holdTotal = calcHoldingCostTotal(holdingCosts, saleInfo.holdingMonths);
     const saleTotal = calcSaleCostTotal(testCosts.sale);
     const vatResult = calcVat(vatInfo, saleInfo.expectedSalePrice, mid, isVatApplicable);
     const effectiveSalePrice = isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
-      ? saleInfo.expectedSalePrice - vatResult.outputVat
-      : saleInfo.expectedSalePrice;
+      ? saleInfo.expectedSalePrice - vatResult.outputVat : saleInfo.expectedSalePrice;
     const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
       taxInfo, mid, effectiveSalePrice, testCosts.acq, holdingCosts, saleInfo.holdingMonths, testCosts.sale
     );
     const profit = effectiveSalePrice - mid - acqTotal - holdTotal - saleTotal
       - comprehensiveIncomeTax - localIncomeTax - vatResult.vatPayable;
-
-    if (profit > targetProfit) lo = mid;
-    else hi = mid;
+    if (profit > targetProfit) lo = mid; else hi = mid;
   }
-
   return Math.floor(lo);
 };
 
 const findMaxBidForRate = (
-  propertyInfo: PropertyInfo,
-  bidInfo: BidInfo,
-  saleInfo: SaleInfo,
-  baseCosts: AcquisitionCosts,
-  holdingCosts: HoldingCosts,
-  saleCosts: SaleCosts,
-  taxInfo: TaxInfo,
-  vatInfo: VatInfo,
-  targetRate: number
+  propertyInfo: PropertyInfo, bidInfo: BidInfo, saleInfo: SaleInfo,
+  baseCosts: AcquisitionCosts, holdingCosts: HoldingCosts, saleCosts: SaleCosts,
+  taxInfo: TaxInfo, capitalGainsTaxInfo: CapitalGainsTaxInfo, vatInfo: VatInfo, targetRate: number
 ): number => {
   if (targetRate <= 0) return 0;
-
   const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
-
-  let lo = 0;
-  let hi = saleInfo.expectedSalePrice;
-
+  let lo = 0, hi = saleInfo.expectedSalePrice;
   for (let i = 0; i < 50; i++) {
     const mid = (lo + hi) / 2;
     const testCosts = buildCostsForBid(propertyInfo, mid, baseCosts, holdingCosts, saleCosts);
-
     const acqTotal = calcAcquisitionCostTotal(testCosts.acq);
     const holdTotal = calcHoldingCostTotal(holdingCosts, saleInfo.holdingMonths);
     const saleTotal = calcSaleCostTotal(testCosts.sale);
     const vatResult = calcVat(vatInfo, saleInfo.expectedSalePrice, mid, isVatApplicable);
     const effectiveSalePrice = isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
-      ? saleInfo.expectedSalePrice - vatResult.outputVat
-      : saleInfo.expectedSalePrice;
+      ? saleInfo.expectedSalePrice - vatResult.outputVat : saleInfo.expectedSalePrice;
     const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
       taxInfo, mid, effectiveSalePrice, testCosts.acq, holdingCosts, saleInfo.holdingMonths, testCosts.sale
     );
@@ -775,176 +953,93 @@ const findMaxBidForRate = (
       - comprehensiveIncomeTax - localIncomeTax - vatResult.vatPayable;
     const investment = mid + acqTotal + holdTotal + saleTotal - baseCosts.loanAmount;
     const rate = investment > 0 ? (netProfit / investment) * 100 : 0;
-
-    if (rate > targetRate) lo = mid;
-    else hi = mid;
+    if (rate > targetRate) lo = mid; else hi = mid;
   }
-
   return Math.floor(lo);
-};
-
-// 특정 입찰가에 대한 비용 재계산
-const buildCostsForBid = (
-  propertyInfo: PropertyInfo,
-  bidPrice: number,
-  baseCosts: AcquisitionCosts,
-  holdingCosts: HoldingCosts,
-  saleCosts: SaleCosts
-): { acq: AcquisitionCosts; sale: SaleCosts } => {
-  const acquisitionTax = calcAcquisitionTax(
-    propertyInfo.propertyType,
-    bidPrice,
-    propertyInfo.areaType
-  );
-  const registrationLicenseTax = bidPrice * 0.002;
-  const localEduTax = registrationLicenseTax * 0.2;
-  const stampDuty = calcStampDuty(bidPrice);
-
-  return {
-    acq: {
-      ...baseCosts,
-      acquisitionTax,
-      registrationLicenseTax,
-      localEducationTax: localEduTax,
-      stampDuty,
-    },
-    sale: {
-      ...saleCosts,
-    },
-  };
 };
 
 // ====================================
 // 시나리오 생성
 // ====================================
 export const generateScenarios = (
-  propertyInfo: PropertyInfo,
-  bidInfo: BidInfo,
-  saleInfo: SaleInfo,
-  baseCosts: AcquisitionCosts,
-  holdingCosts: HoldingCosts,
-  saleCosts: SaleCosts,
-  taxInfo: TaxInfo,
-  vatInfo: VatInfo
+  propertyInfo: PropertyInfo, bidInfo: BidInfo, saleInfo: SaleInfo,
+  baseCosts: AcquisitionCosts, holdingCosts: HoldingCosts, saleCosts: SaleCosts,
+  taxInfo: TaxInfo, capitalGainsTaxInfo: CapitalGainsTaxInfo, vatInfo: VatInfo
 ): ScenarioRow[] => {
   const scenarios: ScenarioRow[] = [];
   const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
-
   for (let rate = 50; rate <= 100; rate += 5) {
     const bidPrice = Math.round(propertyInfo.appraisalValue * (rate / 100));
     const testCosts = buildCostsForBid(propertyInfo, bidPrice, baseCosts, holdingCosts, saleCosts);
-
     const acqTotal = calcAcquisitionCostTotal(testCosts.acq);
     const holdTotal = calcHoldingCostTotal(holdingCosts, saleInfo.holdingMonths);
     const saleTotal = calcSaleCostTotal(testCosts.sale);
     const vatResult = calcVat(vatInfo, saleInfo.expectedSalePrice, bidPrice, isVatApplicable);
     const effectiveSalePrice = isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
-      ? saleInfo.expectedSalePrice - vatResult.outputVat
-      : saleInfo.expectedSalePrice;
+      ? saleInfo.expectedSalePrice - vatResult.outputVat : saleInfo.expectedSalePrice;
     const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
       taxInfo, bidPrice, effectiveSalePrice, testCosts.acq, holdingCosts, saleInfo.holdingMonths, testCosts.sale
     );
-
     const netProfit = effectiveSalePrice - bidPrice - acqTotal - holdTotal - saleTotal
       - comprehensiveIncomeTax - localIncomeTax - vatResult.vatPayable;
     const investment = bidPrice + acqTotal + holdTotal + saleTotal - baseCosts.loanAmount;
     const profitRate = investment > 0 ? (netProfit / investment) * 100 : 0;
     const annualProfitRate = saleInfo.holdingMonths > 0 ? profitRate * (12 / saleInfo.holdingMonths) : 0;
-
     scenarios.push({ bidRatePercent: rate, bidPrice, netProfit, profitRate, annualProfitRate });
   }
-
   return scenarios;
 };
 
 // ====================================
-// 대출 레버리지 분석
+// 레버리지 분석
 // ====================================
 export const calcLeverageAnalysis = (
-  propertyInfo: PropertyInfo,
-  bidInfo: BidInfo,
-  saleInfo: SaleInfo,
-  baseCosts: AcquisitionCosts,
-  holdingCosts: HoldingCosts,
-  saleCosts: SaleCosts,
-  taxInfo: TaxInfo,
-  vatInfo: VatInfo
+  propertyInfo: PropertyInfo, bidInfo: BidInfo, saleInfo: SaleInfo,
+  baseCosts: AcquisitionCosts, holdingCosts: HoldingCosts, saleCosts: SaleCosts,
+  taxInfo: TaxInfo, vatInfo: VatInfo
 ): LeverageAnalysis[] => {
   const ltvRatios = [0, 40, 50, 60, 70];
   const isVatApplicable = isVatSubject(propertyInfo.propertyType, propertyInfo.areaType);
-
   return ltvRatios.map((ltv) => {
     const loanAmount = Math.round(bidInfo.bidPrice * (ltv / 100));
     const loanInterest = calcLoanInterest(loanAmount, baseCosts.loanRate || 4.0, saleInfo.holdingMonths);
     const costs: AcquisitionCosts = { ...baseCosts, loanAmount, loanInterest };
-
     const acqTotal = calcAcquisitionCostTotal(costs);
     const holdTotal = calcHoldingCostTotal(holdingCosts, saleInfo.holdingMonths);
     const saleTotal = calcSaleCostTotal(saleCosts);
     const vatResult = calcVat(vatInfo, saleInfo.expectedSalePrice, bidInfo.bidPrice, isVatApplicable);
     const effectiveSalePrice = isVatApplicable && vatInfo.vatInclusionType === 'inclusive'
-      ? saleInfo.expectedSalePrice - vatResult.outputVat
-      : saleInfo.expectedSalePrice;
+      ? saleInfo.expectedSalePrice - vatResult.outputVat : saleInfo.expectedSalePrice;
     const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
       taxInfo, bidInfo.bidPrice, effectiveSalePrice, costs, holdingCosts, saleInfo.holdingMonths, saleCosts
     );
-
     const netProfit = effectiveSalePrice - bidInfo.bidPrice - acqTotal - holdTotal - saleTotal
       - comprehensiveIncomeTax - localIncomeTax - vatResult.vatPayable;
     const ownCapital = bidInfo.bidPrice + acqTotal + holdTotal + saleTotal - loanAmount;
     const roe = ownCapital > 0 ? (netProfit / ownCapital) * 100 : 0;
     const totalProfitRate = (bidInfo.bidPrice + acqTotal + holdTotal + saleTotal) > 0
       ? (netProfit / (bidInfo.bidPrice + acqTotal + holdTotal + saleTotal)) * 100 : 0;
-
     return { ltvRatio: ltv, loanAmount, ownCapital, netProfit, roe, totalProfitRate };
   });
 };
 
-// ====================================
-// 세금 비교: 매매사업자 vs 개인 양도세
-// ====================================
+// 하위 호환 (구버전 Step6Result용)
 export const calcTaxComparison = (
-  tradingProfit: number,
-  holdingMonths: number,
-  businessTaxInfo: TaxInfo,
-  bidPrice: number,
-  salePrice: number,
-  acquisitionCosts: AcquisitionCosts,
-  holdingCosts: HoldingCosts,
-  saleCosts: SaleCosts
+  tradingProfit: number, holdingMonths: number, businessTaxInfo: TaxInfo,
+  bidPrice: number, salePrice: number,
+  acquisitionCosts: AcquisitionCosts, holdingCosts: HoldingCosts, saleCosts: SaleCosts
 ): TaxComparison => {
   const { comprehensiveIncomeTax, localIncomeTax } = calcTaxes(
-    businessTaxInfo,
-    bidPrice,
-    salePrice,
-    acquisitionCosts,
-    holdingCosts,
-    holdingMonths,
-    saleCosts
+    businessTaxInfo, bidPrice, salePrice, acquisitionCosts, holdingCosts, holdingMonths, saleCosts
   );
-
   const businessTax = comprehensiveIncomeTax + localIncomeTax;
   const businessNetProfit = tradingProfit - businessTax;
-
-  // 개인 양도세 (취득비용 공제 후)
   const acquisitionCostForDeduction =
-    acquisitionCosts.acquisitionTax +
-    acquisitionCosts.legalScrivenerFee +
-    acquisitionCosts.registrationLicenseTax;
+    acquisitionCosts.acquisitionTax + acquisitionCosts.legalScrivenerFee + acquisitionCosts.registrationLicenseTax;
   const capitalGainsProfit = Math.max(0, tradingProfit - acquisitionCostForDeduction);
   const capitalGainsTax = calcCapitalGainsTax(capitalGainsProfit, holdingMonths);
-  const individualTax = capitalGainsTax * 1.1; // 지방소득세 10% 포함
+  const individualTax = capitalGainsTax * 1.1;
   const individualNetProfit = tradingProfit - individualTax;
-
-  const advantageous: 'business' | 'individual' =
-    businessNetProfit >= individualNetProfit ? 'business' : 'individual';
-
-  return {
-    businessTax,
-    individualTax,
-    businessNetProfit,
-    individualNetProfit,
-    advantageous,
-    difference: Math.abs(businessNetProfit - individualNetProfit),
-  };
+  const advantageous: 'business' | 'individual' = businessNetProfit >= individualNetProfit ? 'business' : 'individual';
+  return { businessTax, individualTax, businessNetProfit, individualNetProfit, advantageous, difference: Math.abs(businessNetProfit - individualNetProfit) };
 };

@@ -14,6 +14,7 @@ import type {
   SaleCosts,
   TaxInfo,
   VatInfo,
+  CapitalGainsTaxInfo,
   CustomCostItem,
   SavedCalculation,
   CalculationResult,
@@ -47,6 +48,34 @@ const initialPropertyInfo: PropertyInfo = {
   priorRightAmount: 0,
   areaM2: 84,
   areaType: 'under85',
+  regulationZone: 'normal',
+  housingCount: 'one',
+  bidderType: 'individual',
+  corporationType: 'general',
+};
+
+const initialCapitalGainsTaxInfo: CapitalGainsTaxInfo = {
+  taxMode: 'individual_cgt',
+  housingCount: 'one',
+  regulationZone: 'normal',
+  isNonbusiness: false,
+  hasLongTermDeduction: true,
+  longTermDeductionRate: 0,
+  autoLongTermDeduction: true,
+  basicDeduction: 2_500_000,
+  deductibleAcquisitionCosts: true,
+  deductibleRepairCosts: false,
+  isOneHousehold: false,
+  residencyYears: 0,
+  corporationType: 'general',
+  corporateTaxBaseIncome: 0,
+  capitalGainsProfit: 0,
+  longTermDeductionAmount: 0,
+  taxableIncome: 0,
+  capitalGainsTax: 0,
+  localCapitalGainsTax: 0,
+  totalTax: 0,
+  netProfit: 0,
 };
 
 const initialBidInfo: BidInfo = {
@@ -75,6 +104,8 @@ const initialAcquisitionCosts: AcquisitionCosts = {
     movingFee: 0,
     litigationFee: 0,
     enforcementFee: 0,
+    keyMoney: 0,
+    cleanupFee: 0,
   },
   unpaidManagementFee: 0,
   loanAmount: 0,
@@ -92,6 +123,7 @@ const initialHoldingCosts: HoldingCosts = {
   comprehensiveRealEstateTax: 0,
   maintenanceFeeMonthly: 0,
   repairCosts: [],
+  repairCostDetails: [],
   insuranceFee: 0,
   customItems: [],
 };
@@ -100,6 +132,8 @@ const initialSaleCosts: SaleCosts = {
   agentCommission: 0,
   agentCommissionRate: 0.4,
   cancelRegistrationFee: 0,
+  agentCommissionBuy: 0,
+  agentCommissionSell: 0,
   customItems: [],
 };
 
@@ -186,6 +220,7 @@ interface CalculatorActions {
   updateSaleCosts: (updates: Partial<SaleCosts>) => void;
   updateTaxInfo: (updates: Partial<TaxInfo>) => void;
   updateVatInfo: (updates: Partial<VatInfo>) => void;
+  updateCapitalGainsTaxInfo: (updates: Partial<CapitalGainsTaxInfo>) => void;
 
   // 커스텀 항목 관리
   addCustomItem: (section: 'acquisition' | 'holding' | 'sale' | 'tax' | 'repair', item: Omit<CustomCostItem, 'id'>) => void;
@@ -232,6 +267,7 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
       holdingCosts: initialHoldingCosts,
       saleCosts: initialSaleCosts,
       taxInfo: initialTaxInfo,
+      capitalGainsTaxInfo: initialCapitalGainsTaxInfo,
       vatInfo: initialVatInfo,
       targetProfit: 30_000_000,
       targetProfitRate: 10,
@@ -354,6 +390,12 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
       updateVatInfo: (updates) => {
         set((state) => ({
           vatInfo: { ...state.vatInfo, ...updates },
+        }));
+      },
+
+      updateCapitalGainsTaxInfo: (updates) => {
+        set((state) => ({
+          capitalGainsTaxInfo: { ...(state.capitalGainsTaxInfo ?? initialCapitalGainsTaxInfo), ...updates },
         }));
       },
 
@@ -620,13 +662,15 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
           holdingCosts,
           saleCosts,
           taxInfo,
+          capitalGainsTaxInfo,
           vatInfo,
           targetProfit,
           targetProfitRate,
         } = get();
 
-        // vatInfo가 없는 경우 (구버전 localStorage) 기본값 사용
+        // 구버전 localStorage 호환
         const safeVatInfo = vatInfo ?? initialVatInfo;
+        const safeCgtInfo = capitalGainsTaxInfo ?? initialCapitalGainsTaxInfo;
 
         return calculateResult(
           propertyInfo,
@@ -636,6 +680,7 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
           holdingCosts,
           saleCosts,
           taxInfo,
+          safeCgtInfo,
           safeVatInfo,
           targetProfit,
           targetProfitRate
@@ -695,6 +740,7 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
           holdingCosts: initialHoldingCosts,
           saleCosts: initialSaleCosts,
           taxInfo: initialTaxInfo,
+          capitalGainsTaxInfo: initialCapitalGainsTaxInfo,
           vatInfo: initialVatInfo,
           targetProfit: 30_000_000,
           targetProfitRate: 10,
@@ -704,7 +750,7 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
     }),
     {
       name: 'auction-calculator-storage',
-      version: 2, // 버전 올림 (vatInfo 추가)
+      version: 3, // 버전 올림 (capitalGainsTaxInfo 추가)
     }
   )
 );

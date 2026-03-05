@@ -8,7 +8,6 @@ import {
   formatCurrencyKorean,
   formatPercent,
   calcLeverageAnalysis,
-  calcTaxComparison,
 } from '@/lib/calculator';
 import {
   LineChart,
@@ -74,17 +73,7 @@ export default function Step6Result() {
     }
   );
 
-  // 세금 비교
-  const taxComp = calcTaxComparison(
-    result.grossProfit,
-    store.saleInfo.holdingMonths,
-    store.taxInfo,
-    store.bidInfo.bidPrice,
-    store.saleInfo.expectedSalePrice,
-    store.acquisitionCosts,
-    store.holdingCosts,
-    store.saleCosts
-  );
+  // 세금 비교는 result.taxComparison 활용 (calcTaxComparison 불필요)
 
   // 파이차트 데이터
   const pieData = [
@@ -114,15 +103,76 @@ export default function Step6Result() {
     }
   };
 
-  // PDF 내보내기 (간단 구현)
+  // PDF 내보내기
   const handleExport = () => {
     window.print();
+  };
+
+  // Excel 내보내기 (CSV)
+  const handleExcelExport = () => {
+    const taxDetail = result.taxComparison;
+    const rows = [
+      ['경매 입찰가 계산기 - 결과 리포트'],
+      [''],
+      ['=== 기본 정보 ==='],
+      ['물건 종류', store.propertyInfo.propertyType],
+      ['소재지', `${store.propertyInfo.siDo} ${store.propertyInfo.siGunGu}`],
+      ['감정가', store.propertyInfo.appraisalValue],
+      ['낙찰가', store.bidInfo.bidPrice],
+      ['예상 매도가', store.saleInfo.expectedSalePrice],
+      ['보유 기간 (개월)', store.saleInfo.holdingMonths],
+      [''],
+      ['=== 수익 요약 ==='],
+      ['총 투자금', result.totalInvestment],
+      ['총 비용', result.totalCosts],
+      ['순수익 (세후)', result.netProfit],
+      ['수익률 (%)', result.profitRate.toFixed(2)],
+      ['연환산 수익률 (%)', result.annualProfitRate.toFixed(2)],
+      ['월평균 수익', result.monthlyProfit],
+      ['손익분기점', result.breakEvenPrice],
+      [''],
+      ['=== 비용 내역 ==='],
+      ['취득 비용', result.acquisitionCostTotal],
+      ['보유 비용', result.holdingCostTotal],
+      ['매도 비용', result.saleCostTotal],
+      ['세금', result.taxTotal],
+      ...(result.isVatApplicable ? [['부가가치세', result.vatPayable]] : []),
+      [''],
+      ['=== 세금 구조 비교 ==='],
+      ['구분', '세금', '세후순수익', '실효세율(%)'],
+      ['매매사업자(종합소득세)', taxDetail.business.tax, taxDetail.business.netProfit, taxDetail.business.effectiveRate.toFixed(1)],
+      ['개인(양도소득세)', taxDetail.individual.tax, taxDetail.individual.netProfit, taxDetail.individual.effectiveRate.toFixed(1)],
+      ['법인(법인세)', taxDetail.corporation.tax, taxDetail.corporation.netProfit, taxDetail.corporation.effectiveRate.toFixed(1)],
+      ['최유리 구조', taxDetail.best === 'business' ? '매매사업자' : taxDetail.best === 'individual' ? '개인' : '법인', '절세효과', result.taxComparison.bestSavings],
+      [''],
+      ['=== 역산 결과 ==='],
+      ['목표 순수익', store.targetProfit],
+      ['최대 입찰가 (순수익 목표)', result.maxBidForTargetProfit],
+      ['목표 수익률 (%)', store.targetProfitRate],
+      ['최대 입찰가 (수익률 목표)', result.maxBidForTargetRate],
+      [''],
+      ['=== 시나리오 테이블 ==='],
+      ['낙찰가율(%)', '입찰가', '순수익', '수익률(%)', '연환산수익률(%)'],
+      ...result.scenarios.map(s => [s.bidRatePercent, s.bidPrice, s.netProfit, s.profitRate.toFixed(2), s.annualProfitRate.toFixed(2)]),
+    ];
+
+    const csvContent = rows
+      .map(row => row.map(cell => `"${cell}"`).join(','))
+      .join('\n');
+
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `경매계산결과_${new Date().toLocaleDateString('ko-KR').replace(/\./g, '').replace(/\s/g, '')}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const advancedTabs = [
     { id: 'scenario', label: '시나리오 차트' },
     { id: 'leverage', label: '레버리지 분석' },
-    { id: 'tax', label: '세금 비교' },
+    { id: 'tax', label: '세금 비교 (3가지)' },
     { id: 'reverse', label: '역산 기능' },
     { id: 'stats', label: '지역 통계' },
   ];
@@ -434,45 +484,173 @@ export default function Step6Result() {
           </div>
         )}
 
-        {/* ---- 세금 비교 ---- */}
+        {/* ---- 세금 비교 (3가지) ---- */}
         {activeAdvanced === 'tax' && (
           <div className="space-y-4">
+            {/* 최적 구조 배너 */}
             <div className={`p-4 rounded-xl border-2 ${
-              taxComp.advantageous === 'business'
-                ? 'bg-emerald-900/20 border-emerald-600'
-                : 'bg-blue-900/20 border-blue-600'
+              result.taxComparison.best === 'business'
+                ? 'bg-amber-900/20 border-amber-600'
+                : result.taxComparison.best === 'individual'
+                ? 'bg-blue-900/20 border-blue-600'
+                : 'bg-purple-900/20 border-purple-600'
             }`}>
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-2xl">{taxComp.advantageous === 'business' ? '🏢' : '👤'}</span>
+                <span className="text-2xl">
+                  {result.taxComparison.best === 'business' ? '🏢' : result.taxComparison.best === 'individual' ? '👤' : '🏛️'}
+                </span>
                 <div>
                   <p className="font-bold text-white text-sm">
-                    {taxComp.advantageous === 'business' ? '매매사업자' : '개인 양도세'}가 유리합니다
+                    {result.taxComparison.best === 'business' ? '매매사업자(종합소득세)'
+                      : result.taxComparison.best === 'individual' ? '개인(양도소득세)'
+                      : '법인(법인세)'}가 유리합니다
                   </p>
                   <p className="text-xs text-slate-400">
-                    차이: {formatCurrencyKorean(taxComp.difference)} 절세 가능
+                    최대 {formatCurrencyKorean(result.taxComparison.bestSavings)} 절세 효과
                   </p>
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="p-3 bg-slate-800 rounded-xl border border-slate-700">
-                <p className="text-xs text-slate-400 mb-2">🏢 매매사업자 (종합소득세)</p>
-                <CostSummaryRow label="세금" amount={taxComp.businessTax} />
-                <CostSummaryRow label="세후 순수익" amount={taxComp.businessNetProfit} isTotal />
+            {/* 3가지 비교 카드 */}
+            <div className="grid grid-cols-1 gap-3">
+              {/* 매매사업자 */}
+              <div className={`p-4 rounded-xl border ${
+                result.taxComparison.best === 'business'
+                  ? 'bg-amber-900/20 border-amber-600'
+                  : 'bg-slate-800 border-slate-700'
+              }`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🏢</span>
+                    <div>
+                      <p className="text-sm font-semibold text-slate-200">매매사업자</p>
+                      <p className="text-xs text-slate-500">종합소득세 (사업소득)</p>
+                    </div>
+                  </div>
+                  {result.taxComparison.best === 'business' && (
+                    <span className="px-2 py-0.5 bg-amber-500 text-black text-xs font-bold rounded">최적</span>
+                  )}
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">세금</span>
+                    <span className="font-mono text-red-400">{formatCurrencyKorean(result.taxComparison.business.tax)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">실효세율</span>
+                    <span className="font-mono text-slate-300">{result.taxComparison.business.effectiveRate.toFixed(1)}%</span>
+                  </div>
+                  <div className="flex justify-between border-t border-slate-700 pt-1.5">
+                    <span className="text-slate-300 font-medium">세후 순수익</span>
+                    <span className={`font-mono font-bold ${result.taxComparison.business.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {formatCurrencyKorean(result.taxComparison.business.netProfit)}
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div className="p-3 bg-slate-800 rounded-xl border border-slate-700">
-                <p className="text-xs text-slate-400 mb-2">👤 개인 (양도소득세)</p>
-                <CostSummaryRow label="세금" amount={taxComp.individualTax} />
-                <CostSummaryRow label="세후 순수익" amount={taxComp.individualNetProfit} isTotal />
+
+              {/* 개인 양도소득세 */}
+              <div className={`p-4 rounded-xl border ${
+                result.taxComparison.best === 'individual'
+                  ? 'bg-blue-900/20 border-blue-600'
+                  : 'bg-slate-800 border-slate-700'
+              }`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">👤</span>
+                    <div>
+                      <p className="text-sm font-semibold text-slate-200">개인</p>
+                      <p className="text-xs text-slate-500">양도소득세 (분리과세)</p>
+                    </div>
+                  </div>
+                  {result.taxComparison.best === 'individual' && (
+                    <span className="px-2 py-0.5 bg-blue-500 text-white text-xs font-bold rounded">최적</span>
+                  )}
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {result.taxComparison.individual.breakdown && (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">양도차익</span>
+                        <span className="font-mono text-slate-400">{formatCurrencyKorean(result.taxComparison.individual.breakdown.capitalGains)}</span>
+                      </div>
+                      {result.taxComparison.individual.breakdown.longTermDeduction > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-slate-500">장기보유특별공제</span>
+                          <span className="font-mono text-emerald-400">-{formatCurrencyKorean(result.taxComparison.individual.breakdown.longTermDeduction)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">기본공제</span>
+                        <span className="font-mono text-emerald-400">-{formatCurrencyKorean(result.taxComparison.individual.breakdown.basicDeduction)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-slate-500">과세표준</span>
+                        <span className="font-mono text-slate-400">{formatCurrencyKorean(result.taxComparison.individual.breakdown.taxBase)}</span>
+                      </div>
+                    </>
+                  )}
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">세금</span>
+                    <span className="font-mono text-red-400">{formatCurrencyKorean(result.taxComparison.individual.tax)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">실효세율</span>
+                    <span className="font-mono text-slate-300">{result.taxComparison.individual.effectiveRate.toFixed(1)}%</span>
+                  </div>
+                  <div className="flex justify-between border-t border-slate-700 pt-1.5">
+                    <span className="text-slate-300 font-medium">세후 순수익</span>
+                    <span className={`font-mono font-bold ${result.taxComparison.individual.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {formatCurrencyKorean(result.taxComparison.individual.netProfit)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 법인 */}
+              <div className={`p-4 rounded-xl border ${
+                result.taxComparison.best === 'corporation'
+                  ? 'bg-purple-900/20 border-purple-600'
+                  : 'bg-slate-800 border-slate-700'
+              }`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🏛️</span>
+                    <div>
+                      <p className="text-sm font-semibold text-slate-200">법인</p>
+                      <p className="text-xs text-slate-500">법인세 (9%~24% 누진)</p>
+                    </div>
+                  </div>
+                  {result.taxComparison.best === 'corporation' && (
+                    <span className="px-2 py-0.5 bg-purple-500 text-white text-xs font-bold rounded">최적</span>
+                  )}
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">세금</span>
+                    <span className="font-mono text-red-400">{formatCurrencyKorean(result.taxComparison.corporation.tax)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">실효세율</span>
+                    <span className="font-mono text-slate-300">{result.taxComparison.corporation.effectiveRate.toFixed(1)}%</span>
+                  </div>
+                  <div className="flex justify-between border-t border-slate-700 pt-1.5">
+                    <span className="text-slate-300 font-medium">세후 순수익</span>
+                    <span className={`font-mono font-bold ${result.taxComparison.corporation.netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {formatCurrencyKorean(result.taxComparison.corporation.netProfit)}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
 
             <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700 text-xs text-slate-400 space-y-1">
-              <p>📌 개인 양도세 기준:</p>
-              <p>• 보유 {store.saleInfo.holdingMonths}개월 ({store.saleInfo.holdingMonths < 12 ? '단기 70%' : store.saleInfo.holdingMonths < 24 ? '1년이상 60%' : '2년이상 일반과세'})</p>
-              <p>• 취득 관련 비용 일부 공제 후 과세</p>
-              <p>• 매매사업자는 보유기간 무관, 종합소득세 과세</p>
+              <p>📌 세금 비교 기준:</p>
+              <p>• 매매사업자: 매매차익 - 비용처리 = 종합소득세 과세 (6%~45%)</p>
+              <p>• 개인: 취득가·필요경비 공제 후 양도소득세 분리과세</p>
+              <p>• 법인: 법인세 누진 9%~24% + 주택 취득 법인 추가세 20%</p>
+              <p>• Step 5에서 상세 설정 변경 시 비교 결과가 달라집니다</p>
             </div>
           </div>
         )}
@@ -579,20 +757,27 @@ export default function Step6Result() {
       </div>
 
       {/* ========== 저장 / 내보내기 버튼 ========== */}
-      <div className="flex gap-3 flex-wrap">
+      <div className="flex gap-2 flex-wrap">
         <button
           type="button"
           onClick={() => setShowSaveModal(true)}
-          className="flex-1 py-3 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-xl transition-colors text-sm"
+          className="flex-1 min-w-[120px] py-3 bg-amber-500 hover:bg-amber-400 text-slate-900 font-bold rounded-xl transition-colors text-sm"
         >
           💾 계산 저장
         </button>
         <button
           type="button"
           onClick={handleExport}
-          className="flex-1 py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-xl transition-colors text-sm"
+          className="flex-1 min-w-[120px] py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-xl transition-colors text-sm"
         >
-          📄 PDF 내보내기
+          📄 PDF 출력
+        </button>
+        <button
+          type="button"
+          onClick={handleExcelExport}
+          className="flex-1 min-w-[120px] py-3 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl transition-colors text-sm"
+        >
+          📊 Excel 내보내기
         </button>
       </div>
 

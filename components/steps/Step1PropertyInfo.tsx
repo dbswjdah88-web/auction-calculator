@@ -4,7 +4,7 @@ import React from 'react';
 import { useCalculatorStore } from '@/store/calculatorStore';
 import { MoneyInput, SectionHeader } from '@/components/ui/inputs';
 import { calcMinimumBidPrice, isVatSubject } from '@/lib/calculator';
-import type { PropertyType, OccupancyStatus } from '@/types';
+import type { PropertyType, OccupancyStatus, RegulationZone, HousingCount, BidderType } from '@/types';
 
 // 시/도 목록
 const SI_DO_LIST = [
@@ -30,8 +30,23 @@ const OCCUPANCY_OPTIONS: { value: OccupancyStatus; label: string; icon: string }
   { value: 'owner', label: '소유자 점유', icon: '🏠' },
 ];
 
+const REGULATION_ZONES: { value: RegulationZone; label: string; desc: string }[] = [
+  { value: 'normal', label: '일반지역', desc: '양도세 중과 없음' },
+  { value: 'speculation', label: '투기지역', desc: '+10%p 추가' },
+  { value: 'overheated', label: '투기과열지구', desc: '다주택 중과' },
+  { value: 'land_trade', label: '토지거래허가구역', desc: '토지거래 제한' },
+];
+
+const HOUSING_COUNT: { value: HousingCount; label: string }[] = [
+  { value: 'one', label: '1주택' },
+  { value: 'two', label: '2주택' },
+  { value: 'three_plus', label: '3주택+' },
+];
+
 export default function Step1PropertyInfo() {
   const { propertyInfo, updatePropertyInfo } = useCalculatorStore();
+
+  const isResidential = ['apartment', 'villa', 'house', 'officetel'].includes(propertyInfo.propertyType);
 
   const handleFailedBidChange = (count: number) => {
     const newMinPrice = calcMinimumBidPrice(
@@ -55,7 +70,7 @@ export default function Step1PropertyInfo() {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <SectionHeader
         title="물건 기본 정보"
         description="경매 물건의 기본 정보를 입력해주세요."
@@ -334,6 +349,149 @@ export default function Step1PropertyInfo() {
         onChange={(v) => updatePropertyInfo({ priorRightAmount: v })}
         hint="낙찰 후 인수해야 하는 선순위 보증금 등"
       />
+
+      {/* ────── 세금 계산 기준 설정 (주거용만 표시) ────── */}
+      <div className="border-t border-slate-700/50 pt-6">
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-lg">⚖️</span>
+          <h3 className="text-sm font-semibold text-slate-200">세금 계산 기준 설정</h3>
+          <span className="text-xs text-slate-500">(양도세 중과세율 판단용)</span>
+        </div>
+
+        {/* 입찰자 구분 */}
+        <div className="mb-5">
+          <label className="block text-xs font-medium text-slate-400 mb-2">입찰자 구분</label>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              { value: 'individual' as BidderType, label: '👤 개인', desc: '양도소득세 적용' },
+              { value: 'corporation' as BidderType, label: '🏢 법인', desc: '법인세 + 주택 추가세' },
+            ].map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => updatePropertyInfo({ bidderType: opt.value })}
+                className={`p-3 rounded-xl border text-sm font-medium transition-all text-left
+                  ${
+                    (propertyInfo.bidderType ?? 'individual') === opt.value
+                      ? 'bg-blue-500/20 border-blue-500 text-blue-300'
+                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                  }`}
+              >
+                <div className="font-semibold">{opt.label}</div>
+                <div className="text-xs opacity-70 mt-0.5">{opt.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* 규제지역 구분 */}
+        {isResidential && (
+          <div className="mb-5">
+            <label className="block text-xs font-medium text-slate-400 mb-2">지역 구분 (주거용 양도세 중과 판단)</label>
+            <div className="grid grid-cols-2 gap-2">
+              {REGULATION_ZONES.map((zone) => (
+                <button
+                  key={zone.value}
+                  type="button"
+                  onClick={() => updatePropertyInfo({ regulationZone: zone.value })}
+                  className={`p-2.5 rounded-lg border text-xs font-medium transition-all text-left
+                    ${
+                      (propertyInfo.regulationZone ?? 'normal') === zone.value
+                        ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                    }`}
+                >
+                  <div className="font-semibold">{zone.label}</div>
+                  <div className="opacity-70 mt-0.5">{zone.desc}</div>
+                </button>
+              ))}
+            </div>
+            {(propertyInfo.regulationZone ?? 'normal') !== 'normal' && (
+              <div className="mt-2 p-2.5 bg-yellow-900/20 border border-yellow-700/40 rounded-lg">
+                <p className="text-xs text-yellow-300">
+                  ⚠️ 규제지역 내 다주택자는 양도소득세 중과세율이 적용됩니다.
+                  {propertyInfo.regulationZone === 'speculation' && ' 투기지역: +10%p'}
+                  {propertyInfo.regulationZone === 'overheated' && ' 투기과열지구: 2주택 +20%p, 3주택+ +30%p'}
+                  {propertyInfo.regulationZone === 'land_trade' && ' 토지거래허가구역: 실거주 의무'}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* 주택 보유 수 (주거용만) */}
+        {isResidential && (
+          <div className="mb-5">
+            <label className="block text-xs font-medium text-slate-400 mb-2">주택 보유 수 (취득 후 기준)</label>
+            <div className="flex gap-2">
+              {HOUSING_COUNT.map((hc) => (
+                <button
+                  key={hc.value}
+                  type="button"
+                  onClick={() => updatePropertyInfo({ housingCount: hc.value })}
+                  className={`flex-1 py-2.5 rounded-lg text-sm font-medium border transition-all
+                    ${
+                      (propertyInfo.housingCount ?? 'one') === hc.value
+                        ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300'
+                        : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-500'
+                    }`}
+                >
+                  {hc.label}
+                </button>
+              ))}
+            </div>
+            {(propertyInfo.housingCount ?? 'one') === 'one' && (
+              <p className="text-xs text-emerald-400 mt-1.5">
+                ✅ 1세대 1주택: 2년 보유+거주 시 비과세(12억 이하) 가능
+              </p>
+            )}
+            {(propertyInfo.housingCount ?? 'one') === 'two' && (
+              <p className="text-xs text-yellow-400 mt-1.5">
+                ⚠️ 2주택: 규제지역 내 +20%p 중과세율 적용
+              </p>
+            )}
+            {(propertyInfo.housingCount ?? 'one') === 'three_plus' && (
+              <p className="text-xs text-red-400 mt-1.5">
+                🔴 3주택+: 규제지역 내 +30%p 중과세율 적용
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* 세율 요약 박스 */}
+        <div className="p-3 bg-slate-800/60 border border-slate-600/50 rounded-xl">
+          <p className="text-xs font-medium text-slate-400 mb-2">📋 현재 설정 기준 양도세율 예상</p>
+          <div className="space-y-1">
+            {(() => {
+              const zone = propertyInfo.regulationZone ?? 'normal';
+              const count = propertyInfo.housingCount ?? 'one';
+              const bidder = propertyInfo.bidderType ?? 'individual';
+              if (bidder === 'corporation') {
+                const isRes = ['apartment', 'villa', 'house', 'officetel'].includes(propertyInfo.propertyType);
+                return (
+                  <div className="text-xs text-slate-300">
+                    <span className="text-blue-400">법인세</span>: 9%~24% (누진) 
+                    {isRes && <span className="text-red-400"> + 주택 추가세 20%p</span>}
+                  </div>
+                );
+              }
+              if (isResidential) {
+                if (count === 'one' && zone === 'normal') {
+                  return <div className="text-xs text-emerald-300">1세대 1주택: 비과세 가능 (2년 보유+거주, 12억 이하)</div>;
+                }
+                if (count === 'two' && zone !== 'normal') {
+                  return <div className="text-xs text-yellow-300">다주택 중과: 기본세율 + 20%p</div>;
+                }
+                if (count === 'three_plus' && zone !== 'normal') {
+                  return <div className="text-xs text-red-300">다주택 중과: 기본세율 + 30%p</div>;
+                }
+              }
+              return <div className="text-xs text-slate-300">일반 누진세율 6%~45% (2년+ 보유 기준)</div>;
+            })()}
+            <div className="text-xs text-slate-500">* 보유기간·거주기간에 따라 실제 세율 달라짐</div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
