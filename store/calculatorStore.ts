@@ -364,9 +364,19 @@ export const useCalculatorStore = create<CalculatorState & CalculatorActions>()(
 
       // 비용 업데이트
       updateAcquisitionCosts: (updates) => {
-        set((state) => ({
-          acquisitionCosts: { ...state.acquisitionCosts, ...updates },
-        }));
+        set((state) => {
+          const merged = { ...state.acquisitionCosts, ...updates };
+          // 대출 관련 값이 바뀐 경우 loanInterest 즉시 재계산
+          // (loanInterest가 updates에 이미 포함된 경우는 그 값을 우선)
+          if ('loanInterest' in updates) {
+            return { acquisitionCosts: merged };
+          }
+          if ('loanAmount' in updates || 'loanRate' in updates) {
+            const holdingMonths = state.saleInfo.holdingMonths;
+            merged.loanInterest = calcLoanInterest(merged.loanAmount, merged.loanRate, holdingMonths);
+          }
+          return { acquisitionCosts: merged };
+        });
       },
 
       updateHoldingCosts: (updates) => {

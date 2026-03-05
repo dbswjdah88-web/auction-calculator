@@ -14,6 +14,7 @@ import {
   calcAcquisitionCostTotal,
   calcHoldingCostTotal,
   calcSaleCostTotal,
+  calcLoanInterest,
 } from '@/lib/calculator';
 
 type SubTab = 'acquisition' | 'holding' | 'sale';
@@ -193,14 +194,20 @@ export default function Step4Costs() {
             <MoneyInput
               label="대출 금액"
               value={acquisitionCosts.loanAmount}
-              onChange={(v) => updateAcquisitionCosts({ loanAmount: v })}
+              onChange={(v) => {
+                const interest = calcLoanInterest(v, acquisitionCosts.loanRate, saleInfo.holdingMonths);
+                updateAcquisitionCosts({ loanAmount: v, loanInterest: interest });
+              }}
               hint={`LTV: ${bidInfo.bidPrice > 0 ? ((acquisitionCosts.loanAmount / bidInfo.bidPrice) * 100).toFixed(0) : 0}%`}
             />
             <div className="grid grid-cols-2 gap-3">
               <RateInput
                 label="대출 금리 (연 %)"
                 value={acquisitionCosts.loanRate}
-                onChange={(v) => updateAcquisitionCosts({ loanRate: v })}
+                onChange={(v) => {
+                  const interest = calcLoanInterest(acquisitionCosts.loanAmount, v, saleInfo.holdingMonths);
+                  updateAcquisitionCosts({ loanRate: v, loanInterest: interest });
+                }}
                 step={0.1}
               />
               <div>
@@ -208,23 +215,34 @@ export default function Step4Costs() {
                 <input
                   type="number"
                   value={acquisitionCosts.loanMonths}
-                  onChange={(e) =>
-                    updateAcquisitionCosts({ loanMonths: parseInt(e.target.value) || 1 })
-                  }
+                  onChange={(e) => {
+                    const months = parseInt(e.target.value) || 1;
+                    updateAcquisitionCosts({ loanMonths: months });
+                  }}
                   min={1}
                   className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm
                     focus:outline-none focus:ring-2 focus:ring-amber-500"
                 />
               </div>
             </div>
-            <div className="p-2 bg-slate-800 rounded-lg text-sm">
-              <span className="text-slate-400">예상 이자: </span>
-              <span className="text-amber-300 font-mono font-bold">
-                {formatCurrencyKorean(acquisitionCosts.loanInterest)}
-              </span>
-              <span className="text-xs text-slate-500 ml-1">
-                ({formatCurrencyKorean(acquisitionCosts.loanAmount)} × {acquisitionCosts.loanRate}% × {saleInfo.holdingMonths}개월)
-              </span>
+            {/* 이자 미리보기: 보유기간(holdingMonths) 기준으로 실시간 계산 */}
+            <div className="p-3 bg-slate-800 rounded-lg space-y-1.5">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-slate-400">예상 이자 (보유기간 기준)</span>
+                <span className="text-amber-300 font-mono font-bold text-sm">
+                  {formatCurrencyKorean(
+                    calcLoanInterest(acquisitionCosts.loanAmount, acquisitionCosts.loanRate, saleInfo.holdingMonths)
+                  )}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500">
+                {formatCurrencyKorean(acquisitionCosts.loanAmount)} × {acquisitionCosts.loanRate}% ÷ 12 × {saleInfo.holdingMonths}개월
+              </p>
+              {acquisitionCosts.loanAmount > 0 && acquisitionCosts.loanRate > 0 && (
+                <p className="text-xs text-blue-400">
+                  ※ 보유기간({saleInfo.holdingMonths}개월) 기준 계산 — Step3 보유기간 변경 시 자동 반영됩니다.
+                </p>
+              )}
             </div>
             <MoneyInput
               label="대출 설정비"
